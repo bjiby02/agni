@@ -1,8 +1,25 @@
+# secrets and local state
 .env
-.venv/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/api_token
+devcert/
+
+# config that belongs in the repo
+!data/refuges.json
+!data/barriers.json
+
 __pycache__/
-*.py[cod]
+*.pyc
+.venv/
 node_modules/
 dist/
 .DS_Store
 
+# account-specific resource ids, created by tunnel.sh / agent setup
+data/agent_id
+data/phone_id
+
+# demo renders: large, regenerable
+*.mp4
