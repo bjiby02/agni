@@ -397,9 +397,12 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
     dispatched=bool(incident and incident["status"]=="dispatched")
     say="A dispatcher is reviewing your report. Stay where you are safe."
     eta_s=None
+    if dispatched and dispatch:
+        say=f"A dispatcher has sent {dispatch['unit_id']}. Stay where you are safe."
+    elif dispatched:
+        say="A dispatcher has sent help. Stay where you are safe."
     if dispatch and dispatch["route_kind"]=="road" and dispatch["eta_s"] is not None:
         eta_s=dispatch["eta_s"]
-        say=f"A dispatcher has sent {dispatch['unit_id']}. Stay where you are safe."
     return {"say":say,"incident_id":iid,"confirmed":confirmed,"dispatched":dispatched,
             "should_transfer":False,"shelter":None,"eta_s":eta_s}
 

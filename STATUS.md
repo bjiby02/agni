@@ -4,7 +4,7 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 
 | Task | Status | Evidence or next step |
 |---|---|---|
-| T0 Repo, config, mock switch, database, event bus and SSE | LIVE-UNVERIFIED | Offline event replay tests pass. HTTP replay test is present but skipped because FastAPI is not installed. Package download cannot reach PyPI in this environment. |
+| T0 Repo, config, mock switch, database, event bus and SSE | LIVE-UNVERIFIED | Offline event replay and caller-guidance API checks pass when the web stack is available. The default offline suite skips those checks when FastAPI is not installed. |
 | T1 Voice tools and post-call webhook | LIVE-UNVERIFIED | Intake, bearing, needs, guidance, rescue, transcript and signed post-call routes are in progress. Mock API tests and ElevenLabs payload verification remain. H2/H3/H10 are needed for live calls. |
 | T2 Dispatcher console shell | LIVE-UNVERIFIED | Responsive console now reads the AGNI state and event APIs. `npm run build` passes. Browser preview is blocked by the local-server sandbox policy; end-to-end UI proof remains. |
 | T3 Landmark location and bearings | LIVE-UNVERIFIED | The landmark resolver only pins a cached record; unknown places remain unpinned. Offline matching tests pass. H4 and a live cached landmark import are needed. |
@@ -21,11 +21,11 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 | T14 After-action report and measured proof panel | BLOCKED | Must read measured `sim.json` and `eval.json` only. |
 | T15 Evaluation harness | BLOCKED | Persona and fixture evaluation remain. |
 | T16 Stretch integrations | BLOCKED | Tiger Data only if the surge counter needs it. Solana is cut in v2. |
-| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | README is updated. `make demo` and the acceptance checklist remain. H11 is needed for Devpost submission. |
+| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | README is updated. A mock end-to-end intake-to-dispatch workflow passed. `make demo` and the acceptance checklist remain. H11 is needed for Devpost submission. |
 
 ## Needs the account owner
 
-- H1: Create the new hosted repository and grant push access. No remote is configured.
+- H1: Done. The independent public repository is configured and `main` is pushed.
 - H2-H3: ElevenLabs and Twilio accounts, keys and phone integration.
 - H4: Gemini API key.
 - H5: Bright Data zones, token and dataset IDs.
