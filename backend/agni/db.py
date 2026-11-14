@@ -33,7 +33,8 @@ def connect():
 
 def init() -> None:
     with _LOCK, connect() as db:
-        db.executescript((ROOT / "backend" / "migrations" / "001_core.sqlite.sql").read_text())
+        for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql"):
+            db.executescript((ROOT / "backend" / "migrations" / name).read_text())
 
         count = db.execute("SELECT COUNT(*) FROM units").fetchone()[0]
         if not count:
@@ -71,13 +72,18 @@ def state() -> dict[str, Any]:
             "SELECT rings.* FROM rings JOIN (SELECT incident_id,MAX(id) AS latest_id FROM rings GROUP BY incident_id) latest "
             "ON rings.id=latest.latest_id ORDER BY rings.id DESC"
         )]
+        ops = dict(db.execute("SELECT mode,safe_mode,replay_label FROM ops_state WHERE id=1").fetchone() or {})
+        handoffs = [dict(r) for r in db.execute("SELECT id,call_id,incident_id,summary,transfer_status,started_at,ended_at,resumed_by FROM handoffs ORDER BY id DESC LIMIT 20")]
+        reports = [dict(r) for r in db.execute("SELECT incident_id,log_sha256,signed_by,signed_at,anchor_status FROM reports")]
+        rescues = [dict(r) for r in db.execute("SELECT r.id,r.incident_id,r.call_id,r.created_at FROM rescues r ORDER BY r.id DESC LIMIT 50")]
     for h in hazards:
         h["geometry"] = json.loads(h.pop("geometry_json") or "null")
     for ring in rings:
         ring["geometry"] = json.loads(ring.pop("geom_json"))
         ring["wind"] = json.loads(ring.pop("wind_json"))
     return {"incidents": incidents, "units": units, "hazards": hazards, "merges": merges,
-            "rings": rings, "last_seq": last}
+            "rings": rings, "last_seq": last, "ops": ops, "handoffs": handoffs, "reports": reports,
+            "rescues": rescues}
 
 
 def incident(iid: str) -> dict[str, Any] | None:

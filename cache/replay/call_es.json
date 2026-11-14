@@ -1,0 +1,19 @@
+{
+  "label": "Replay · scripted practice call",
+  "note": "Synthetic call written for the demo. Not a recording of a real person. Every event it produces is labeled Replay.",
+  "steps": [
+    {"at": 0.0, "tool": "report_fire", "call": "replay-es-1", "body": {"landmark_text": "detrás del Vons de Carmel Valley", "what_seen": "humo negro subiendo de la ladera", "language": "es"}},
+    {"at": 0.4, "say": ["replay-es-1", "agent", "Esta es una línea de emergencia automática. ¿Dónde está usted?", "es"]},
+    {"at": 1.2, "say": ["replay-es-1", "caller", "Estoy detrás del Vons de Carmel Valley. Veo humo negro en la ladera.", "es"]},
+    {"at": 2.0, "say": ["replay-es-1", "agent", "Gracias. ¿El humo está hacia el mar o hacia el interior?", "es"]},
+    {"at": 2.8, "say": ["replay-es-1", "caller", "Hacia el mar, al suroeste.", "es"]},
+    {"at": 3.2, "tool": "add_bearing", "call": "replay-es-1", "body": {"lat": 32.91, "lon": -117.17, "bearing_deg": 225, "direction_words": "suroeste", "source": "words"}},
+    {"at": 3.8, "say": ["replay-es-1", "agent", "¿Hay alguien con usted que no pueda caminar?", "es"]},
+    {"at": 4.4, "say": ["replay-es-1", "caller", "Mi abuela usa silla de ruedas.", "es"]},
+    {"at": 4.8, "tool": "set_needs", "call": "replay-es-1", "body": {"mobility": true, "people": 2, "notes": "wheelchair"}},
+    {"at": 6.0, "tool": "report_fire", "call": "replay-en-2", "body": {"landmark_text": "near the Vons in Carmel Valley", "what_seen": "smoke over the hill", "language": "en"}},
+    {"at": 6.4, "say": ["replay-en-2", "caller", "There's smoke over the hill, I'm south of it on the trail.", "en"]},
+    {"at": 7.0, "tool": "add_bearing", "call": "replay-en-2", "body": {"lat": 32.885, "lon": -117.19, "bearing_deg": 0, "direction_words": "north", "source": "compass"}},
+    {"at": 7.4, "say": ["replay-en-2", "agent", "Thank you. I have recorded the direction.", "en"]}
+  ]
+}

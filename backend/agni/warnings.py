@@ -10,9 +10,22 @@ ROOT = Path(__file__).resolve().parents[2]
 WARN_LIST = Path(os.environ.get("AGNI_WARN_LIST", ROOT / "seed" / "warn_list.json"))
 
 
+MOCK_WARN_LIST = ROOT / "backend" / "tests" / "fixtures" / "warn_list.mock.json"
+
+
+def _source() -> Path:
+    """Practice mode falls back to fake 555 numbers when the real opt-in list is empty."""
+    from .config import settings
+    try:
+        empty = not json.loads(WARN_LIST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        empty = True
+    return MOCK_WARN_LIST if settings.mock and empty else WARN_LIST
+
+
 def opted_in_contacts() -> list[dict[str, Any]]:
     try:
-        raw = json.loads(WARN_LIST.read_text(encoding="utf-8"))
+        raw = json.loads(_source().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(raw, list):

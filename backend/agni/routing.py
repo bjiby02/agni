@@ -92,9 +92,10 @@ def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] |
         meters = geo.haversine_m(origin[0], origin[1], lat, lon)
         bearing = geo.bearing_deg(origin[0], origin[1], lat, lon)
         place = geo.Place(str(shelter.get("name") or "Unnamed refuge"), "R", lat, lon, meters, bearing)
-        places.append(place)
         if wind_to_deg is not None and geo.angle_diff(bearing, wind_to_deg) < geo.DRIFT_ARC:
             refused.append({"name": place.name, "reason": "downwind of the estimate"})
+            continue  # a refused shelter must never be the one we pick
+        places.append(place)
     selected = geo.choose(origin, places, None, need="fire", drift=wind_to_deg)
     if selected is None:
         return {"shelter": None, "refused": refused}

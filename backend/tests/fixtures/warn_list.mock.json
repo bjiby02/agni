@@ -1,0 +1,29 @@
+[
+  {
+    "id": "practice-home-1",
+    "label": "Practice home 1 (fake number)",
+    "phone": "+15550100001",
+    "lat": 32.895,
+    "lon": -117.1898,
+    "lang": "es",
+    "opted_in": true
+  },
+  {
+    "id": "practice-home-2",
+    "label": "Practice home 2 (fake number)",
+    "phone": "+15550100002",
+    "lat": 32.8967,
+    "lon": -117.1891,
+    "lang": "en",
+    "opted_in": true
+  },
+  {
+    "id": "practice-home-3",
+    "label": "Practice home 3, not opted in",
+    "phone": "+15550100003",
+    "lat": 32.8958,
+    "lon": -117.1894,
+    "lang": "en",
+    "opted_in": false
+  }
+]
