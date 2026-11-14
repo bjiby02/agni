@@ -1,15 +1,15 @@
 #!/bin/bash
-# ARES stage demo. ENTER advances each beat, so you control the pace.
-B="${ARES_BASE:-http://127.0.0.1:8810}"
+# AGNI stage demo. ENTER advances each beat, so you control the pace.
+B="${AGNI_BASE:-http://127.0.0.1:8810}"
 T="$(cat "$(dirname "$0")/data/api_token")"
-STEP="${ARES_STEP:-1}"
+STEP="${AGNI_STEP:-1}"
 beat () { printf "\n\033[1;36m%s\033[0m\n" "$1"; [ "$STEP" = "1" ] && read -r -s; }
 line () { printf "\n\033[1;37m%s\033[0m\n" "$1"; }
 call () {
   printf "\033[0;33m  caller:  %s\033[0m\n" "$2"
   curl -s -m 90 --get "$B/preview" \
     --data-urlencode "token=$T" --data-urlencode "phone=$1" --data-urlencode "q=$2" \
-  | python3 -c "import json,sys;print('  \033[1;32mARES  :  '+json.load(sys.stdin)['say']+'\033[0m')"
+  | python3 -c "import json,sys;print('  \033[1;32mAGNI  :  '+json.load(sys.stdin)['say']+'\033[0m')"
 }
 # The server clears its own tables, so the console and the swarm agree with
 # what the room just watched. Safe to run as many times as you like.

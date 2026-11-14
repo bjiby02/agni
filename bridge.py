@@ -157,7 +157,7 @@ def _connect_live() -> tuple[ssl.SSLSocket, bytes]:
         f"Sec-WebSocket-Key: {nonce}\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         f"Authorization: Bearer {key}\r\n"
-        "User-Agent: ares/1.0\r\n"
+        "User-Agent: agni/1.0\r\n"
         "\r\n"
     )
     live.sendall(request.encode())

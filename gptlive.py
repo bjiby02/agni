@@ -15,7 +15,7 @@ import urllib.request
 import tools
 
 API = "https://api.openai.com/v1/live/sessions"
-MODEL = os.environ.get("ARES_LIVE_MODEL", "gpt-live-1")
+MODEL = os.environ.get("AGNI_LIVE_MODEL", "gpt-live-1")
 TIMEOUT = 8.0
 
 

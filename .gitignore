@@ -3,6 +3,9 @@
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
 data/api_token
 devcert/
 
@@ -16,6 +19,8 @@ __pycache__/
 node_modules/
 dist/
 .DS_Store
+backend/sim/sim.json
+backend/ml/eval/eval.json
 
 # account-specific resource ids, created by tunnel.sh / agent setup
 data/agent_id

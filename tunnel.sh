@@ -33,7 +33,7 @@ repoint () {
   python3 - "$1" <<'PY'
 import json, pathlib, re, sys, urllib.request, urllib.error
 URL = sys.argv[1].rstrip("/")
-ROOT = pathlib.Path("/Users/bijinjiby/Downloads/ares")
+ROOT = pathlib.Path("/Users/bijinjiby/Downloads/agni")
 envp = ROOT / ".env"; s = envp.read_text()
 envp.write_text(re.sub(r'PUBLIC_BASE_URL=.*', f'PUBLIC_BASE_URL="{URL}"', s))
 env = {}
@@ -90,10 +90,10 @@ printf "raising a tunnel"
 if ! start_tunnel; then echo; echo "no tunnel came up"; exit 1; fi
 echo; echo "tunnel: $URL"
 repoint "$URL"
-echo "restarting ARES..."
+echo "restarting AGNI..."
 lsof -ti:8810 | xargs kill 2>/dev/null
 sleep 2
-nohup python3 run.py > /tmp/ares.log 2>&1 &
+nohup python3 run.py > /tmp/agni.log 2>&1 &
 sleep 9
 TOK=$(cat data/api_token)
 echo "  local  $(curl -s -m 8  -o /dev/null -w '%{http_code}' http://127.0.0.1:8810/health)"

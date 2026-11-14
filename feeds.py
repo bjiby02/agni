@@ -15,7 +15,7 @@ import pathlib
 import urllib.parse
 import urllib.request
 
-UA = "AresRescue/1.0 (disaster voice dispatch)"
+UA = "AGNIRescue/1.0 (disaster voice dispatch)"
 
 WIND_TTL = 900.0        # NWS observations update roughly every 20 min
 CAMERA_TTL = 21600.0    # camera positions are static; the images are not

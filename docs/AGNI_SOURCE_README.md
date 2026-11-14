@@ -1,9 +1,9 @@
-# ARES
+# AGNI
 
 **A phone line that decides.**
 
 A person in danger dials a number. They say what is wrong and where they are.
-ARES either walks them to a specific named building away from the hazard, or
+AGNI either walks them to a specific named building away from the hazard, or
 tells them to stay exactly where they are — and when every exit is unsafe, it
 refuses to send them anywhere.
 
@@ -23,7 +23,7 @@ Every existing product in this space — Axon 911, Prepared, Carbyne, RapidSOS �
 is a **call-taker assist** tool. They make a human dispatcher faster. That does
 not scale past the number of people wearing headsets.
 
-ARES **absorbs**. It answers the calls a dispatcher will never reach, handles
+AGNI **absorbs**. It answers the calls a dispatcher will never reach, handles
 them to completion, and hands a human only the ones that need one.
 
 ---
@@ -72,7 +72,7 @@ and they are all built around a single dispatcher on a single call.
 ## Quick start
 
 ```bash
-cd ~/Projects/ares
+cd ~/Projects/agni
 cp .env.example .env        # then fill in the keys you have
 python3 run.py
 ```

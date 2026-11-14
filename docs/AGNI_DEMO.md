@@ -1,4 +1,4 @@
-# ARES — stellar demo
+# AGNI — stellar demo
 
 Total: about 3 minutes. The phone is the demo. Everything else is support.
 
@@ -7,7 +7,7 @@ Total: about 3 minutes. The phone is the demo. Everything else is support.
 ## Setup — 60 seconds before you walk on
 
 ```bash
-cd ~/Downloads/ares && ./tunnel.sh
+cd ~/Downloads/agni && ./tunnel.sh
 ```
 
 Wait for `READY. Call +1 743 330 4352`. If it doesn't say that, run it again — nothing
@@ -16,7 +16,7 @@ else works until it does.
 Console on the projector:
 
 ```bash
-open "http://127.0.0.1:8810/console?token=$(cat ~/Downloads/ares/data/api_token)"
+open "http://127.0.0.1:8810/console?token=$(cat ~/Downloads/agni/data/api_token)"
 ```
 
 Phone on speaker, volume up. Terminal where you can reach it, not on screen.
@@ -55,7 +55,7 @@ Phone on speaker, volume up. Terminal where you can reach it, not on screen.
 >
 > *(beat)*
 >
-> The amber squares are VIIRS satellite detections. The satellite agrees with our
+> The amber squagni are VIIRS satellite detections. The satellite agrees with our
 > callers. But look at the timestamp — it was acquired hours ago. Satellites run
 > about three hours behind the overpass. **Our callers beat them.**"
 
@@ -93,7 +93,7 @@ describe a fire while they're running from it.
 > "And when every way out is inside the fire, it does not guess.
 >
 > A destination has to sit ninety degrees clear of the hazard. Below forty,
-> ARES sends nobody anywhere and says so:
+> AGNI sends nobody anywhere and says so:
 >
 > *'I will not send you toward the danger. Stay in a solid building, or move away
 > from it on foot.'*
@@ -115,7 +115,7 @@ describe a fire while they're running from it.
 > no route may cross one. Live satellite. Live cameras. Buildings from
 > OpenStreetMap at call time.
 >
-> We're ARES. We answer the calls a dispatcher will never reach."
+> We're AGNI. We answer the calls a dispatcher will never reach."
 
 ---
 

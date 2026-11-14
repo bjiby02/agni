@@ -1,4 +1,4 @@
-/* ARES talk. Every call is GPT-Live-1 over WebRTC.
+/* AGNI talk. Every call is GPT-Live-1 over WebRTC.
  *
  * Live path  : the peer connection. Audio never stops, barge-in is native.
  * Async path : the decision core, while GPT-Live keeps the line.
@@ -10,10 +10,10 @@
   var TOKEN = new URLSearchParams(location.search).get("token") || "";
   var PHONE = new URLSearchParams(location.search).get("phone") || "";
   if (!PHONE) {
-    PHONE = sessionStorage.getItem("ares-phone") || "";
+    PHONE = sessionStorage.getItem("agni-phone") || "";
     if (!PHONE) {
       PHONE = "+1619555" + String(Math.floor(1000 + Math.random() * 9000));
-      sessionStorage.setItem("ares-phone", PHONE);
+      sessionStorage.setItem("agni-phone", PHONE);
     }
   }
   var $ = function (id) { return document.getElementById(id); };
@@ -152,7 +152,7 @@
       close(waiting);
       var line = (out && out.say) || "I did not catch that. Tell me what is happening, and where you are.";
       if (out && out.incident) decision(out);
-      log("ares", "ARES", line);
+      log("agni", "AGNI", line);
       speakLine(line);
     }).catch(function (e) {
       close(waiting);
@@ -218,7 +218,7 @@
         speaking += ev.delta || ""; break;
       case "response.output_audio_transcript.done":
       case "response.audio_transcript.done":
-        if (speaking.trim()) log("ares", "ARES", speaking.trim());
+        if (speaking.trim()) log("agni", "AGNI", speaking.trim());
         speaking = ""; break;
       case "response.done":
         close(liveSeg); liveSeg = null;

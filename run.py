@@ -30,7 +30,7 @@ busy = probe.connect_ex(("127.0.0.1", PORT)) == 0
 probe.close()
 if busy:
     print(f"\nPort {PORT} is already serving.\n")
-    print("  Something is running there already — most likely an older copy of ARES.")
+    print("  Something is running there already — most likely an older copy of AGNI.")
     print("  Free it and start again:\n")
     print(f"    lsof -ti:{PORT} | xargs kill\n")
     raise SystemExit(1)

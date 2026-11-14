@@ -1,4 +1,4 @@
-# ARES — demo runbook
+# AGNI — demo runbook
 
 ## Start
 ```
@@ -29,7 +29,7 @@ These three resolve cleanly — no namesake question:
 **3. The fourth judge** says nothing about fire:
 > "I am at Price Center and I need to get out"
 
-ARES answers: **"3 other callers nearby report smoke to the south.** From Price
+AGNI answers: **"3 other callers nearby report smoke to the south.** From Price
 Center in San Diego. Head northeast, away from the smoke, about 1.2 kilometers,
 toward Scripps Memorial Hospital La Jolla."
 

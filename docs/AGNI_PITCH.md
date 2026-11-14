@@ -1,4 +1,4 @@
-# ARES — 60-second pitch script
+# AGNI — 60-second pitch script
 
 Read it straight. Don't perform it. Pauses are marked.
 
@@ -15,7 +15,7 @@ Read it straight. Don't perform it. Pauses are marked.
 
 **[0:10 – 0:18]  Camera.**
 
-> We built ARES. It's a phone line that decides.
+> We built AGNI. It's a phone line that decides.
 > You call, you say what's wrong and where you are, and it either walks you to a specific named building away from the fire — or it refuses to send you anywhere.
 
 ---
@@ -53,7 +53,7 @@ Read it straight. Don't perform it. Pauses are marked.
 
 > Live wind from the National Weather Service. Live fire perimeters from NIFC. Satellites run three hours behind — our callers beat them by hours.
 > *(beat)*
-> We're ARES. We answer the calls a dispatcher will never reach.
+> We're AGNI. We answer the calls a dispatcher will never reach.
 
 ---
 
@@ -62,13 +62,13 @@ Read it straight. Don't perform it. Pauses are marked.
 **1 — Camera (you, ~30s of talking):**
 
 ```bash
-ffmpeg -y -f avfoundation -framerate 30 -video_size 1280x720 -i "0:0" -t 40 -c:v libx264 -preset ultrafast -crf 18 -c:a aac ~/Downloads/ares/take-camera.mp4
+ffmpeg -y -f avfoundation -framerate 30 -video_size 1280x720 -i "0:0" -t 40 -c:v libx264 -preset ultrafast -crf 18 -c:a aac ~/Downloads/agni/take-camera.mp4
 ```
 
 **2 — Screen (console + `./demo.sh` side by side, ~40s):**
 
 ```bash
-ffmpeg -y -f avfoundation -framerate 30 -i "2:0" -t 45 -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p -c:a aac ~/Downloads/ares/take-screen.mp4
+ffmpeg -y -f avfoundation -framerate 30 -i "2:0" -t 45 -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p -c:a aac ~/Downloads/agni/take-screen.mp4
 ```
 
 Press `q` in the terminal to stop early.

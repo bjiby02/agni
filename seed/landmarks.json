@@ -1,0 +1,12 @@
+[
+  {
+    "id": "mock-vons-carmel-valley",
+    "name": "Vons Carmel Valley",
+    "aliases": ["Carmel Valley Vons", "Vons at Carmel Valley"],
+    "kind": "store",
+    "lat": 32.91,
+    "lon": -117.17,
+    "source": "mock fixture - replace through the cached landmark importer",
+    "scraped_at": null
+  }
+]
