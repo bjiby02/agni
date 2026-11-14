@@ -154,7 +154,7 @@ class WarningInput(BaseModel):
 
 
 class SurgeInput(BaseModel):
-    n: int = Field(default=75, ge=3, le=75)
+    n: int = Field(default=75, ge=4, le=75)
     seconds: int = Field(default=90, ge=1, le=90)
 
 

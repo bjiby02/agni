@@ -21,12 +21,13 @@ CENTERS = [
     (32.895, -117.203, "Smoke near North Creek"),
     (32.870, -117.235, "Flames by canyon trail"),
     (32.925, -117.175, "Smoke by eastern ridge"),
+    (32.850, -117.215, "Smoke over the southern mesa"),
 ]
 
 
 def run(n: int = 75, max_seconds: int = 90, output: Path | None = None) -> dict:
-    if n < 3:
-        raise ValueError("The surge needs at least three calls")
+    if n < len(CENTERS):
+        raise ValueError(f"The surge needs at least {len(CENTERS)} calls")
     output = output or ROOT / "backend" / "sim" / "sim.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     previous = db.DB_PATH
