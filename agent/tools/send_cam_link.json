@@ -1,0 +1,24 @@
+{
+  "name": "send_cam_link",
+  "description": "Call when the caller agrees to show the smoke with their phone camera.",
+  "type": "webhook",
+  "api_schema": {
+    "url": "{PUBLIC_BASE_URL}/api/tools/send_cam_link",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{ELEVENLABS_TOOL_SECRET}"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "{{system__conversation_id}}"
+        }
+      }
+    }
+  }
+}

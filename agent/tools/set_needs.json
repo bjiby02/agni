@@ -1,0 +1,36 @@
+{
+  "name": "set_needs",
+  "description": "Call when you learn who needs help: anyone who can't walk, kids, pets.",
+  "type": "webhook",
+  "api_schema": {
+    "url": "{PUBLIC_BASE_URL}/api/tools/set_needs",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{ELEVENLABS_TOOL_SECRET}"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "{{system__conversation_id}}"
+        },
+        "mobility": {
+          "type": "boolean",
+          "description": "Someone cannot walk or leave alone"
+        },
+        "people": {
+          "type": "integer",
+          "description": "How many people are with the caller"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Kids, pets, oxygen, wheelchair"
+        }
+      }
+    }
+  }
+}

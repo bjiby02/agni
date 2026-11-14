@@ -55,7 +55,7 @@ import swarm
 
 class IncidentIn(BaseModel):
     conversation_id: str = Field(min_length=1, max_length=120)
-    landmark_text: str = Field(min_length=1, max_length=300)
+    landmark_text: str | None = Field(default=None, max_length=300)
     what_seen: str = Field(default="unknown", max_length=1000)
     language: str = Field(default="en", max_length=12)
     address_text: str | None = Field(default=None, max_length=300)
@@ -376,6 +376,10 @@ def evidence_rows(iid: str) -> list[dict]:
 async def report_fire(payload: IncidentIn, _: None = Depends(tool_auth)):
     if not db.overflow_enabled():
         return {"incident_id":None,"overflow":False,"say":"Please hang up and dial 911."}
+    spoken=(payload.landmark_text or payload.address_text or "").strip()
+    if not spoken:
+        raise HTTPException(422,"landmark_text or address_text is required")
+    payload.landmark_text=spoken
     with db.connect() as conn:
         call = conn.execute("SELECT incident_id FROM calls WHERE id=?", (payload.conversation_id,)).fetchone()
         if call and call["incident_id"]:
