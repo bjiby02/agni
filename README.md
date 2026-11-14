@@ -6,6 +6,8 @@ AGNI is a crisis-intelligence command system for emergency teams. It combines ra
 
 ## What works today
 
+- Tactical Leaflet console with incident map, responder routes, caller-derived hazard bearings, VIIRS fire detections, and ALERTCalifornia camera stills
+- Built-in voice-only emergency intake and dispatcher action flow from the newly integrated response engine
 - Seeded incident, responder, and hazard data for a deterministic demo
 - Priority calculation from smoke, flames, and blocked-exit signals
 - Nearest available responder selection that penalizes hazard-intersecting paths
@@ -26,6 +28,18 @@ React command console  <-- SSE / REST -->  FastAPI application
 The local starter intentionally uses in-memory demo data. Provider integrations are isolated behind adapters so API credentials can be added without entangling dispatch logic.
 
 ## Run locally
+
+### Tactical console and voice response engine
+
+The integrated tactical console is served by the root Python application. Configure any provider credentials you have in `.env` (the rules-based/demo path works without model credentials), then run:
+
+```bash
+python3 run.py
+```
+
+Open `http://127.0.0.1:8810/console` and use the operator token printed at startup. The map, fire detections, and camera stills are supplied by cached situation feeds; missing feeds show as unavailable/stale rather than blocking the call flow. The full operator walkthrough is in [`docs/ARES_RUNBOOK.md`](docs/ARES_RUNBOOK.md).
+
+### AGNI API prototype and React console
 
 Backend (Python 3.11+):
 

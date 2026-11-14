@@ -1,4 +1,4 @@
-/* ARES sector board. Streets around the calls, camera stills on this page. */
+/* AGNI tactical console. Streets around incidents, camera stills on this page. */
 (function () {
   "use strict";
 
