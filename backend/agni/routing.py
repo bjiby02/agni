@@ -55,20 +55,31 @@ def blocked_by_closure(unit: dict[str, Any], destination: tuple[float, float], c
 
 
 def route_options(destination: tuple[float, float], units: list[dict[str, Any]], closures: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank units. A blocked straight-line fallback is never recommended."""
+    """Rank units. Prefer live ORS/OSRM road routes when keys/network allow."""
+    from .services import ors
+
     dest_lat, dest_lon = destination
     options = []
     for unit in units:
         if unit.get("status") != "available":
             continue
-        distance_m = geo.haversine_m(float(unit["lat"]), float(unit["lon"]), dest_lat, dest_lon)
         closure = blocked_by_closure(unit, destination, closures)
+        live = ors.route_unit(
+            (float(unit["lat"]), float(unit["lon"])),
+            (dest_lat, dest_lon),
+            closures if not closure else [],
+        )
+        # If the straight-line path crosses a mapped closure and ORS did not return a road route,
+        # keep the unit marked blocked so a human sees the hazard.
+        path_blocked = bool(closure) and live.get("route_kind") != "road"
         options.append({
-            "unit_id": unit["id"], "callsign": unit.get("callsign", unit["id"]), "distance_m": round(distance_m),
-            "eta_s": round(distance_m / 1000 / 35 * 3600), "route_kind": "estimate",
-            "available": True, "path_blocked": bool(closure), "blocked_by": closure,
+            "unit_id": unit["id"], "callsign": unit.get("callsign", unit["id"]),
+            "distance_m": live["distance_m"], "eta_s": live["eta_s"],
+            "route_kind": live["route_kind"], "available": True,
+            "path_blocked": path_blocked, "blocked_by": closure if path_blocked else None,
+            "note": live.get("note"), "geometry": live.get("geometry"),
         })
-    return sorted(options, key=lambda item: (item["path_blocked"], item["distance_m"]))
+    return sorted(options, key=lambda item: (item["path_blocked"], item["eta_s"], item["distance_m"]))
 
 
 def configured_refuges() -> list[dict[str, Any]]:

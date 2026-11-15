@@ -34,6 +34,12 @@ def connect():
 def init() -> None:
     with _LOCK, connect() as db:
         db.executescript((ROOT / "backend" / "migrations" / "001_core.sqlite.sql").read_text())
+        # Additive live-call columns (safe on existing DBs).
+        cols = {row["name"] for row in db.execute("PRAGMA table_info(calls)").fetchall()}
+        if "phone_e164" not in cols:
+            db.execute("ALTER TABLE calls ADD COLUMN phone_e164 TEXT")
+        if "phone_last4" not in cols:
+            db.execute("ALTER TABLE calls ADD COLUMN phone_last4 TEXT")
 
         count = db.execute("SELECT COUNT(*) FROM units").fetchone()[0]
         if not count:

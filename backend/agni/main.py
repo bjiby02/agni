@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -58,6 +59,7 @@ class IncidentIn(BaseModel):
     what_seen: str = Field(default="unknown", max_length=1000)
     language: str = Field(default="en", max_length=12)
     address_text: str | None = Field(default=None, max_length=300)
+    phone: str | None = Field(default=None, max_length=32)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lon: float | None = Field(default=None, ge=-180, le=180)
 
@@ -142,6 +144,7 @@ class JumpInInput(BaseModel):
 
 class HandBackInput(BaseModel):
     actor: str = Field(default="dispatcher", min_length=1, max_length=100)
+    to_number: str | None = Field(default=None, max_length=32)
 
 
 class SignReportInput(BaseModel):
@@ -189,12 +192,34 @@ def _ensure_seed() -> None:
         bus.emit("incident.created", "inc_demo_torrey", {"status":"possible","level":3,"lat":32.866,"lon":-117.251,"location_src":"demo","title":"Possible smoke near Torrey Pines"})
 
 
+async def _signal_poll_loop() -> None:
+    """Refresh crowd signals on a timer. Skips automatically while a call is live."""
+    while True:
+        try:
+            if not settings.mock:
+                pollers.refresh_crowd_signals()
+        except Exception:
+            pass
+        await asyncio.sleep(120 if settings.mock else 90)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
     _ensure_seed()
     pollers.ensure_demo_hazards()
-    yield
+    task = asyncio.create_task(_signal_poll_loop())
+    try:
+        # Prime cached signals once at boot (fixture or live).
+        try:
+            pollers.refresh_crowd_signals()
+        except Exception:
+            pass
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(title="AGNI Incident API", version="0.2.0", lifespan=lifespan)
@@ -261,10 +286,27 @@ async def resolve_call_landmark(iid: str, conversation_id: str, spoken: str) -> 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "database": "sqlite", "mode": "mock" if settings.mock else "live-unverified",
-            "overflow_enabled": db.overflow_enabled(),
-            "firms_key_set": bool(os.environ.get("FIRMS_MAP_KEY")),
-            "brightdata_key_set": bool(os.environ.get("BRIGHTDATA_API_TOKEN") or os.environ.get("BRIGHTDATA_API_KEY"))}
+    from .services import httputil
+    return {
+        "ok": True,
+        "database": "sqlite",
+        "mode": "mock" if settings.mock else "live",
+        "overflow_enabled": db.overflow_enabled(),
+        "public_base_url": settings.public_base_url,
+        "keys": {
+            "elevenlabs": httputil.keyed("ELEVENLABS_API_KEY"),
+            "elevenlabs_phone": httputil.keyed("ELEVENLABS_PHONE_NUMBER_ID"),
+            "elevenlabs_agent": httputil.keyed("ELEVENLABS_AGENT_ID"),
+            "dispatcher_phone": httputil.keyed("DISPATCHER_PHONE_NUMBER"),
+            "gemini": httputil.keyed("GEMINI_API_KEY"),
+            "brightdata": httputil.keyed("BRIGHTDATA_API_TOKEN", "BRIGHTDATA_SERP_ZONE"),
+            "firms": httputil.keyed("FIRMS_MAP_KEY"),
+            "ors": httputil.keyed("ORS_API_KEY"),
+            "neon": httputil.keyed("NEON_API_KEY", "NEON_PROJECT_ID"),
+            "serial": httputil.keyed("SERIAL_PORT"),
+            "tool_secret": bool(settings.tool_secret),
+        },
+    }
 
 
 @app.get("/api/state")
@@ -336,11 +378,16 @@ async def report_fire(payload: IncidentIn, _: None = Depends(tool_auth)):
                          (payload.landmark_text, payload.language, payload.conversation_id))
             return {"incident_id":iid,"overflow":True,"say":"Got it. Which way is the smoke from you?"}
         iid="inc_"+uuid4().hex[:10]
+        phone = (payload.phone or "").strip() or None
+        last4 = phone[-4:] if phone and len(phone) >= 4 else None
         conn.execute("INSERT INTO incidents(id,status,level,kind,title,lat,lon,location_src,description) VALUES(?,?,?,?,?,?,?,?,?)",
                      (iid,"possible",3,"fire","Possible fire report",payload.lat,payload.lon,"caller",payload.what_seen))
-        conn.execute("INSERT INTO calls(id,incident_id,direction,language,landmark_text) VALUES(?,?,'inbound',?,?)",
-                     (payload.conversation_id,iid,payload.language,payload.landmark_text))
-    bus.emit("call.started",iid,{"call_id":payload.conversation_id,"direction":"inbound","language":payload.language})
+        conn.execute(
+            "INSERT INTO calls(id,incident_id,direction,language,landmark_text,phone_e164,phone_last4) VALUES(?,?,'inbound',?,?,?,?)",
+            (payload.conversation_id, iid, payload.language, payload.landmark_text, phone, last4),
+        )
+    bus.emit("call.started",iid,{"call_id":payload.conversation_id,"direction":"inbound","language":payload.language,
+                                 "phone_last4": (payload.phone or "")[-4:] if payload.phone else None})
     bus.emit("incident.created",iid,{"status":"possible","level":3,"lat":payload.lat,"lon":payload.lon,
                                      "location_src":"caller","landmark_text":payload.landmark_text,
                                      "title":"Possible fire report"})
@@ -405,7 +452,7 @@ def set_needs(payload: NeedsInput, _: None = Depends(tool_auth)):
 @app.post("/api/tools/get_guidance")
 def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
     with db.connect() as conn:
-        call=conn.execute("SELECT incident_id FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
+        call=conn.execute("SELECT incident_id,state FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
         if not call: raise HTTPException(404,"Call not found")
         iid=call["incident_id"]
         incident=conn.execute("SELECT status,assigned_unit FROM incidents WHERE id=?",(iid,)).fetchone() if iid else None
@@ -414,14 +461,17 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
     dispatched=bool(incident and incident["status"]=="dispatched")
     say="A dispatcher is reviewing your report. Stay where you are safe."
     eta_s=None
-    if dispatched and dispatch:
+    transfer = eleven.should_transfer(payload.conversation_id) or call["state"] == "human"
+    if transfer:
+        say="I'm connecting you to a dispatcher now. Stay on the line."
+    elif dispatched and dispatch:
         say=f"A dispatcher has sent {dispatch['unit_id']}. Stay where you are safe."
     elif dispatched:
         say="A dispatcher has sent help. Stay where you are safe."
     if dispatch and dispatch["route_kind"]=="road" and dispatch["eta_s"] is not None:
         eta_s=dispatch["eta_s"]
     return {"say":say,"incident_id":iid,"confirmed":confirmed,"dispatched":dispatched,
-            "should_transfer":False,"shelter":None,"eta_s":eta_s}
+            "should_transfer":transfer,"shelter":None,"eta_s":eta_s}
 
 
 @app.post("/api/tools/send_cam_link")
@@ -598,9 +648,14 @@ def route(iid: str,_: str=Depends(operator)):
             pass
     ranked=routing.route_options((item["lat"], item["lon"]), units, closures)
     shelters=routing.choose_shelter((item["lat"], item["lon"]), None, wind_to_deg)
-    data={"units":ranked[:3],"route_kind":"estimate","avoids":[row["blocked_by"] for row in ranked if row["blocked_by"]],
-          "shelter":shelters["shelter"],"refused":shelters["refused"],
-          "note":"Straight-line estimate. It is not a safe-route guarantee."}
+    top = ranked[:3]
+    kind = top[0]["route_kind"] if top else "estimate"
+    note = (top[0].get("note") if top else None) or (
+        "Straight-line estimate. It is not a safe-route guarantee." if kind == "estimate"
+        else "Live road route. Still requires human approval before dispatch."
+    )
+    data={"units":top,"route_kind":kind,"avoids":[row["blocked_by"] for row in ranked if row["blocked_by"]],
+          "shelter":shelters["shelter"],"refused":shelters["refused"],"note":note}
     bus.emit("route.ready",iid,data)
     return data
 
@@ -638,20 +693,48 @@ def send_warning(iid: str, payload: WarningInput, idempotency_key: str = Header(
             raise HTTPException(409, "Create a human-reviewed spread estimate before a warning")
         ring = {"type": "Feature", "properties": {"label": f"{ring_row['minutes']}-min estimate"},
                 "geometry": json.loads(ring_row["geom_json"])}
-        recipients = warning_service.targeted_contacts(ring)
-        if not recipients:
-            raise HTTPException(409, "No opted-in recipients are inside the estimate ring")
-        # This project has no live dialer implementation. Persist the approved batch only.
-        status = "mock_queued" if settings.mock else "live_unverified"
+        units = [dict(r) for r in conn.execute("SELECT * FROM units WHERE status='available'")]
+    recipients = warning_service.targeted_contacts(ring)
+    if not recipients:
+        raise HTTPException(409, "No opted-in recipients are inside the estimate ring")
+    shelter = None
+    direction = None
+    try:
+        if incident["lat"] is not None and incident["lon"] is not None:
+            route_data = routing.route_options(
+                (float(incident["lat"]), float(incident["lon"])), units, [],
+            )
+            shelter_info = routing.choose_shelter(
+                (float(incident["lat"]), float(incident["lon"])), None, None,
+            )
+            shelter = (shelter_info.get("shelter") or {}).get("name")
+            if route_data:
+                direction = "follow the recommended road away from the fire"
+    except Exception:
+        pass
+    dial = eleven.batch_warning_calls(
+        recipients, payload.message_key, incident_id=iid,
+        direction=direction, shelter=shelter,
+    )
+    status = dial.get("status") or ("mock_queued" if settings.mock else "submitted")
+    if not dial.get("ok") and not settings.mock:
+        raise HTTPException(502, dial.get("reason") or "Warning batch failed")
+    with db.connect() as conn:
         cur = conn.execute(
             "INSERT INTO warnings(incident_id,approved_by,recipients,languages_json,message_key,idempotency_key,status) VALUES(?,?,?,?,?,?,?)",
             (iid, actor, len(recipients), json.dumps(payload.languages), payload.message_key, idempotency_key, status),
         )
+        warning_id = cur.lastrowid
         conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
-                     (iid, actor, "warning_approved", json.dumps({"warning_id": cur.lastrowid, "recipients": len(recipients)})))
-    data = {"warning_id": cur.lastrowid, "incident_id": iid, "recipients": len(recipients),
+                     (iid, actor, "warning_approved",
+                      json.dumps({"warning_id": warning_id, "recipients": len(recipients),
+                                  "batch_id": dial.get("batch_id"), "dial": {"placed": dial.get("placed"),
+                                                                             "status": status}})))
+    serial_bridge.write_dispatch("W")
+    data = {"warning_id": warning_id, "incident_id": iid, "recipients": len(recipients),
             "recipient_ids": [str(recipient.get("id", "")) for recipient in recipients],
-            "languages": payload.languages, "status": status}
+            "languages": payload.languages, "status": status,
+            "batch_id": dial.get("batch_id"), "placed": dial.get("placed", False)}
     bus.emit("warning.sent", iid, data)
     return data
 
@@ -745,7 +828,7 @@ def _do_hand_back(iid: str, payload: HandBackInput, call_id: str | None = None):
         if not call:
             raise HTTPException(404, "Call not found")
         iid = call["incident_id"]
-    incident_or_404(iid)
+    incident = incident_or_404(iid)
     if call is None:
         with db.connect() as conn:
             call = conn.execute(
@@ -754,11 +837,26 @@ def _do_hand_back(iid: str, payload: HandBackInput, call_id: str | None = None):
             ).fetchone()
     if not call:
         raise HTTPException(409, "No human-held call to hand back")
+    to_number = (payload.to_number or "").strip() or (call["phone_e164"] if "phone_e164" in call.keys() else None)
     with db.connect() as conn:
         conn.execute("UPDATE calls SET state='live' WHERE id=?", (call["id"],))
         conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
-                     (iid, payload.actor, "hand_back", json.dumps({"call_id": call["id"], "mode": "callback"})))
-    callback = eleven.callback_caller(call["id"], None, {"incident_id": iid, "mode": "callback"})
+                     (iid, payload.actor, "hand_back",
+                      json.dumps({"call_id": call["id"], "mode": "callback", "to_last4": (to_number or "")[-4:]})))
+    eleven.request_transfer(call["id"], False)
+    callback = eleven.callback_caller(
+        call["id"],
+        to_number,
+        {
+            "incident_id": iid,
+            "mode": "callback",
+            "title": incident.get("title") or "",
+            "unit": incident.get("assigned_unit") or "",
+            "why_line": incident.get("why_line") or "",
+        },
+    )
+    if not settings.mock and to_number and not callback.get("placed"):
+        raise HTTPException(502, callback.get("reason") or "Callback failed")
     data = {"resumed_by": "agent", "mode": "callback", "call_id": call["id"], "callback": callback}
     bus.emit("handoff.ended", iid, data)
     return data

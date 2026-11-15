@@ -1,47 +1,49 @@
 # AGNI build status
 
-Mock mode is the build mode. Each task uses the states required by the agent brief.
+**Product mode is live (`AGNI_MOCK=0`).** Offline unit tests still force mock. Live phone/data paths activate when their keys are present in local `.env`.
 
 | Task | Status | Evidence or next step |
 |---|---|---|
-| T0 Repo, config, mock switch, database, event bus and SSE | DONE | Offline SSE replay and reconnect tests pass. `make test` green. |
-| T1 Voice tools and post-call webhook | LIVE-UNVERIFIED | Tool routes + signed post-call exist; mock tool tests pass. Live phone needs H2/H3/H10. |
-| T2 Dispatcher console shell | LIVE-UNVERIFIED | React console: Leaflet CARTO dark_matter, fire rows, why_line, NEW badge, keyboard map, JUMP IN. `npm run build` passes. Browser E2E not run in sandbox. |
-| T3 Landmark location and bearings | LIVE-UNVERIFIED | Cached landmark match + bearing ellipse offline tests pass. Live Gemini extract needs H4. |
-| T4 Camera wall and triage | LIVE-UNVERIFIED | Vision normalize/cache/`cant_tell` offline tests pass. Live frames need H4. |
-| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | Evidence API + why_line + Confirm/Reject. FIRMS shows gray “Key not set” without H7. |
-| T6 Merge suggestions and undo | DONE | Offline tests: suggest-only, accept, undo restore. |
-| T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | Closure avoidance + downwind refusal offline tests pass. Live ORS needs H8. |
-| T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Dispatch idempotency + mock serial `D42\n` recorded. Hardware buzz needs H9. |
-| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | Fixture SERP → `signal.new` unverified. HTTP blocked while call live (test). Live zones need H5. |
-| T10 JUMP IN and callback hand-back | LIVE-UNVERIFIED | Mock jump-in + hand-back emit `handoff.started` / `handoff.ended{resumed_by:agent,mode:callback}`. Live transfer needs H10. |
-| T11 Wind spread ring | DONE | 100 m / 10 km / 30-min estimate; NW wind test passes. |
-| T12 Targeted warning and rescue | LIVE-UNVERIFIED | Opt-in + ring filter + Press-1 → `rescue.requested`. Mock queues only. Live dial needs H10. |
-| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | SQLite isolated surge → `sim.json`. Neon branches BLOCKED on H6. |
-| T14 After-action report and proof panel | DONE | Draft from events; Sign closes; `/api/proof` reads only `sim.json`/`eval.json` or null. |
-| T15 Evaluation harness | LIVE-UNVERIFIED | `make eval` writes fixture-measured `eval.json` with `n` per metric. Live personas need H2/H10. |
-| T16 Stretch integrations | BLOCKED | Cut per A8 until T0–T14 are live-green. Solana cut in v2. |
-| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | `make demo` runs storyboard path in mock. Devpost submit is H11. |
+| T0 Repo, config, mock switch, database, event bus and SSE | DONE | Offline SSE tests pass. |
+| T1 Voice tools and post-call webhook | LIVE-UNVERIFIED | Live tool URLs + `make agents` + tunnel repoint ready. Needs H2/H3/H10. |
+| T2 Dispatcher console shell | LIVE-UNVERIFIED | Leaflet console + JUMP IN/hand-back wired. |
+| T3 Landmark location and bearings | LIVE-UNVERIFIED | Cache match offline; live Gemini extract needs H4. |
+| T4 Camera wall and triage | LIVE-UNVERIFIED | Live Gemini vision when `AGNI_MOCK=0` + H4. |
+| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | why_line + Confirm. FIRMS live needs H7. |
+| T6 Merge suggestions and undo | DONE | Offline tests pass. |
+| T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | ORS/OSRM live adapter wired; needs H8 (OSRM works without key). |
+| T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Live serial when `SERIAL_PORT` set (H9). |
+| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | Live SERP when token+zone set; poller skips during live calls. Needs H5. |
+| T10 JUMP IN and callback hand-back | LIVE-UNVERIFIED | `should_transfer` + live Twilio outbound callback. Needs H10. |
+| T11 Wind spread ring | DONE | Offline model tests pass. |
+| T12 Targeted warning and rescue | LIVE-UNVERIFIED | Live ElevenLabs batch/outbound submit wired. Needs H2/H3/H10 + real warn_list phones. |
+| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | SQLite surge works; Neon needs H6. |
+| T14 After-action report and proof panel | DONE | Live Gemini draft when keyed; proof reads measured files only. |
+| T15 Evaluation harness | LIVE-UNVERIFIED | Fixture `make eval` works; live personas need phones. |
+| T16 Stretch integrations | BLOCKED | Cut until core live path is green. |
+| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | See `docs/LIVE_E2E.md`. Devpost is H11. |
 
-## Needs the account owner
+## Needs the account owner (blocks live E2E)
 
-- H1: Done. Public repo configured.
-- H2–H3: ElevenLabs + Twilio keys and phone import.
-- H4: Gemini API key.
-- H5: Bright Data zones, token, dataset IDs.
-- H6: Neon project + API key.
-- H7: NASA FIRMS map key.
-- H8: OpenRouteService key.
-- H9: Flash `hardware/uno_station/uno_station.ino` and set `SERIAL_PORT`.
-- H10: Opt-in phones in `seed/warn_list.json`, `DISPATCHER_PHONE_NUMBER`, answer test calls.
-- H11: Devpost submit.
+Fill these in **local `.env` only**, then run `make live-ready`:
 
-Enter keys in local `.env`. Do not send keys in chat.
+- H2–H3: ElevenLabs + Twilio phone import → `ELEVENLABS_*`
+- H4: `GEMINI_API_KEY`
+- H5: Bright Data token + SERP zone
+- H6: Neon (optional tonight)
+- H7: FIRMS map key
+- H8: ORS key (OSRM fallback works without it)
+- H9: Flash Uno + `SERIAL_PORT`
+- H10: Real opted-in phones in `seed/warn_list.json` + `DISPATCHER_PHONE_NUMBER`
+- H11: Devpost
 
-## Safety state
+## Live boot
 
-- Overflow is disabled by default.
-- Mock mode does not call external services.
-- A human must confirm a fire, approve a dispatch and approve a warning.
-- No phone call is live-verified.
-- Do not show unmeasured metrics as results.
+```sh
+make live-ready
+make agents
+./tunnel.sh
+make dev
+# frontend: cd frontend && npm run dev
+make live-check
+```

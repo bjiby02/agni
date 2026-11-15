@@ -1,4 +1,4 @@
-"""Runtime configuration. Mock mode is the safe default for local development."""
+"""Runtime configuration. Live when AGNI_MOCK=0; each service still requires its own keys."""
 from __future__ import annotations
 
 import os
@@ -20,6 +20,13 @@ class Settings:
     tool_secret: str = os.environ.get("ELEVENLABS_TOOL_SECRET", "")
     database_url: str = os.environ.get("DATABASE_URL", "sqlite:///data/agni-api.sqlite")
     demo_replay: bool = _flag("DEMO_REPLAY", True)
+    public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+
+def reload_settings() -> Settings:
+    global settings
+    settings = Settings()
+    return settings
 
 
 settings = Settings()

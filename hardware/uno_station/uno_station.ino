@@ -31,7 +31,7 @@ void loop() {
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
-      if (buffer.length() >= 2 && buffer.charAt(0) == 'D') {
+      if ((buffer.length() >= 2 && buffer.charAt(0) == 'D') || buffer == "W") {
         pulseStation();
         Serial.println("OK");
       }
