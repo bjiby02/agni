@@ -1,67 +1,66 @@
 # AGNI
 
-**When 911 is flooded, AGNI catches the calls that get dropped — finds the fire, guides the caller to safety, and keeps a human in charge of every decision.**
-
-SanD Hacks · UC San Diego · Nov 14–15, 2026
+**911 overflow for wildfire calls.** When every line is busy, AGNI answers, finds the fire from what callers say, and keeps a human in charge of every decision.
 
 > We don’t replace 911. We catch the calls that get dropped today.
 
----
-
-## The problem
-
-In the Eaton Fire, LA County 911 logs show fire reports arriving hours before the first evacuation order. The calls existed. Nobody fused them in time.
-
-When every line is busy, overflow callers get a busy signal or a long hold. Those are the people AGNI is built for.
+**SanD Hacks · UC San Diego · Nov 14–15, 2026**  
+Repo: [github.com/bjiby02/agni](https://github.com/bjiby02/agni)
 
 ---
 
-## What AGNI is
+## Status: complete for the hackathon demo
 
-An **overflow layer** next to CAD — not in the 911 path.
+Build Spec v2 scope (**T0–T14**) is **shipped** for the SanD Hacks demo — offline `make test` / `AGNI_MOCK=1`, full dispatcher console, voice tools, evidence → confirm → route → dispatch → spread ring → opt-in warning, ops reset, and after-action report.
 
-| Who | What they get |
-|-----|----------------|
-| **Caller** | ElevenLabs answers in their language, asks at most 3 questions, then speaks **one safe direction** from a Bright Data shelter cache (capacity, not downwind — never invented coordinates). |
-| **Dispatcher** | One row per fire (not per call), evidence stack, keyboard Confirm / Approve / JUMP IN / Warn. AI only suggests. |
+| | |
+|--|--|
+| **DONE offline** | T0 skeleton + SSE · T6 merge + undo · T11 spread ring · T14 after-action / proof panel |
+| **Shipped, live path ready** | Voice intake · landmarks · camera wall · evidence + Confirm · routing + dispatch · JUMP IN UI · warnings (opt-in) · Bright Data pollers (cached) · surge / ops |
+| **LIVE-UNVERIFIED** | Some sponsor APIs need a measured live check with keys (see `STATUS.md`) |
+| **BLOCKED / cut** | T16 stretch (Tiger/Solana) cut · Twilio trial cannot SMS freeform camera links (Copy-link workaround) |
 
-**Hard product rules**
-
-1. Overflow only — center turns it on/off (`overflow_enabled`).
-2. A human Confirm / Approve / Send before fire status, dispatch, or warnings.
-3. Bright Data never runs during a live call — cached tables only.
-4. Unknown evidence is gray, never green.
-5. On-screen metrics come from `sim.json` / `eval.json` or the event log — otherwise “not measured yet”.
+Honest detail: [`STATUS.md`](STATUS.md) · live dial checklist: [`docs/LIVE_E2E.md`](docs/LIVE_E2E.md)
 
 ---
 
-## The 75-second demo (what judges should feel)
+## Data → Brain → Action
 
-1. **Overflow ON** · dial the AGNI Twilio number  
-2. Caller: *“Smoke behind the Vons on Carmel Valley Road.”* — three short questions  
-3. **The product moment:** the voice speaks the Bright Data safe path; the console mirrors that exact line  
-4. You **Confirm** → **Approve** — unit to the fire  
-5. Optional: grow the 30‑min ring → targeted warning (opt-in phones only) · Press 1 → rescue pin  
+```
+DATA                         BRAIN                         ACTION
+Bright Data posts/closures   Gemini landmark + triage      ElevenLabs voice (overflow)
+ALERTCalifornia CCTV         Neon / SQLite incident store  Twilio phone + warning calls
+NASA FIRMS · NWS wind        Evidence stack + why_line     ORS / OSRM route + shelter
+NIFC perimeter (cached)      Merge suggest (human M/N)     Serial → station buzz (optional)
+        └──────────── AI only suggests · HUMAN confirms fire, dispatch, warning ────────────┘
+```
 
-Full beat sheet: [DEMO_FLOW.md](DEMO_FLOW.md)
-
----
-
-## Stack (sponsors in the product)
-
-| Layer | Role |
-|-------|------|
-| **ElevenLabs** | Overflow voice agent + tools + warning agent |
-| **Gemini** | Landmarks (no invented coords), camera triage, same-event merge suggest, handoff summary |
-| **Bright Data** | Cached posts, closures, **shelter capacity** — public ears that raise priority only |
-| **Neon** | Incident / audit store + surge-sim branch (when wired) |
-| **FIRMS / NWS / ALERTCalifornia / ORS** | Satellite, wind, cameras confirm reports, routing around closures |
+Crowds and cameras **raise priority**. They never dispatch a unit.
 
 ---
 
-## Run locally
+## What works
 
-Python 3.11+ · Node 20+ · Keys in `.env` only (never commit them).
+| Capability | What you get |
+|------------|----------------|
+| **Voice intake** | Overflow agent · ≤3 questions · tools under 800 ms · language detect |
+| **Landmarks first** | Gemini extracts place words · match against cached landmark list · **never invents coordinates** |
+| **Merge + Undo** | Suggest only · Accept (M) / Keep apart (N) · one-key Undo |
+| **Confirm** | Evidence stack (callers, cams, posts, FIRMS, NIFC, wind) · gray = unknown · Enter confirms |
+| **Route + dispatch** | Nearest unit · avoid closures · downwind shelter refusal · Idempotency-Key · serial bridge |
+| **Spread ring** | 30-min estimate from wind · labeled “estimate” |
+| **Warnings** | Targeted, opt-in list only · Press 1 → rescue pin |
+| **Live area report** | After-action draft from the event clock · human Sign & close |
+| **Ops** | Overflow toggle · Clean slate / reset · surge path · proof panel |
+| **Mock mode** | `AGNI_MOCK=1` — full product with fixtures, no keys |
+
+Demo beat sheet: [`DEMO_FLOW.md`](DEMO_FLOW.md)
+
+---
+
+## How to run
+
+Python 3.11+ · Node 20+ · secrets only in local `.env` (never commit).
 
 ```sh
 cp .env.example .env
@@ -73,18 +72,40 @@ make dev                    # API → http://127.0.0.1:8000
 
 ```sh
 cd frontend && npm install && npm run dev
-# Console → http://127.0.0.1:5173  (Vite proxies /api → :8000)
+# Console → http://127.0.0.1:5173  (proxies /api → :8000)
 ```
 
-Live phone tools need a public tunnel (`PUBLIC_BASE_URL`) and the agent tools pointed at it. See [docs/LIVE_E2E.md](docs/LIVE_E2E.md).
-
-**Mock / offline**
+**Offline / judges without keys**
 
 ```sh
-AGNI_MOCK=1 make test
-AGNI_MOCK=1 make demo
-make eval                   # → measured metrics in eval.json
+AGNI_MOCK=1 make test       # under 60 s, no network
+AGNI_MOCK=1 make demo       # 5-minute script in mock
+make eval                   # writes measured n’s to eval.json (or “not measured yet”)
 ```
+
+**Live phone demo** — public tunnel + `PUBLIC_BASE_URL` pointed at tool webhooks; dial the AGNI Twilio overflow number (team / `STATUS.md`). Console stays at `http://127.0.0.1:5173`.
+
+---
+
+## Honesty rules (product law)
+
+1. **Overflow only** — center switch `overflow_enabled`; off → “hang up and dial 911.”
+2. **A human decides** — Confirm, Approve, Send warning, JUMP IN. AI never turns a pin red alone.
+3. **No invented metrics** — headlines read `sim.json` / `eval.json` / the event log, else **“— not measured yet”**.
+4. **Bright Data never during a call** — pollers write cache; the agent reads tables only.
+5. **Gemini never invents coordinates** — landmarks from a cached list; bearings are a bonus ellipse labeled “estimate.”
+6. **Unknown is gray, never green.**
+7. Outbound calls only to phones on the opt-in warn list.
+
+AGNI is a hackathon prototype. It is **not** wired into a real 911 center and must not be used for emergency response.
+
+---
+
+## Sponsors in the product
+
+**ElevenLabs** · **Gemini** · **Bright Data** · **Neon** · Twilio · NASA FIRMS · OpenRouteService · ALERTCalifornia · NWS / NIFC
+
+Ceremony credit map: [`docs/CEREMONY_SPONSOR_CREDITS.md`](docs/CEREMONY_SPONSOR_CREDITS.md)
 
 ---
 
@@ -92,15 +113,9 @@ make eval                   # → measured metrics in eval.json
 
 | Path | What |
 |------|------|
-| `backend/agni/` | FastAPI core, tools, SSE events, services |
-| `frontend/` | Dispatcher console (Leaflet + React) |
-| `agent/` | ElevenLabs system prompt + webhook tool JSON |
+| `backend/` | FastAPI, tools, SSE, services, mock fakes |
+| `frontend/` | Dispatcher console (map, fire rows, keyboard) |
+| `agent/` | ElevenLabs prompt + webhook tool JSON |
 | `seed/` | Landmarks, shelters, units, opt-in warn list |
-| `AGENTS.md` | Full build spec + task list for agents |
-| `STATUS.md` | What’s DONE / BLOCKED / LIVE-UNVERIFIED |
-
----
-
-## Honesty
-
-AGNI is a hackathon prototype. It is **not** connected to a real 911 center and must not be used for emergency response. Outbound calls only go to numbers on the opt-in list. Every confirm, dispatch, and warning is a human keypress.
+| `AGENTS.md` | Full Build Spec v2 + agent task list |
+| `STATUS.md` | DONE / LIVE-UNVERIFIED / BLOCKED |

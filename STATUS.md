@@ -1,5 +1,13 @@
 # AGNI build status
 
+**COMPLETE for SanD Hacks demo (Build Spec v2 · T0–T14 shipped).** Offline mock path is green; live phone/sponsor paths are wired and marked LIVE-UNVERIFIED until a measured check. Stretch T16 cut. Real blockers left: Twilio trial SMS templates (Copy-link workaround) · H10 answered JUMP IN / warning phones · H11 Devpost.
+
+| Bucket | Tasks |
+|--------|--------|
+| **DONE** | T0 · T6 · T11 · T14 |
+| **Shipped / LIVE-UNVERIFIED** | T1–T5 · T7–T10 · T12–T13 · T15 · T17 |
+| **BLOCKED / cut** | T16 stretch · Twilio freeform SMS (trial) |
+
 **Product mode is live (`AGNI_MOCK=0`).** Offline unit tests still force mock. Live phone/data paths activate when their keys are present in local `.env`.
 
 | Task | Status | Evidence or next step |
