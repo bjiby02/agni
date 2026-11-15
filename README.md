@@ -17,7 +17,7 @@ make seed
 make dev
 ```
 
-The API starts on `http://127.0.0.1:8000`. Mock mode is on by default. It does not call external services in mock mode. The local database is `data/agni-api.sqlite`.
+The API starts on `http://127.0.0.1:8000`. Local `.env` defaults to **live** (`AGNI_MOCK=0`). Services call real APIs when their keys are set; otherwise they degrade honestly. See [docs/LIVE_E2E.md](docs/LIVE_E2E.md). The local database is `data/agni-api.sqlite`.
 
 In a second terminal, start the console:
 
