@@ -9,15 +9,15 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 | T2 Dispatcher console shell | LIVE-UNVERIFIED | Leaflet map on CARTO dark_matter, incident queue, live transcript, evidence, keys C/A/J/W/M/N/U. State rebuilds from the event stream on refresh. `npm run build` passes and a headless browser render showed no app errors. Map tiles need network. |
 | T3 Landmark location and bearings | LIVE-UNVERIFIED | The landmark resolver only pins a cached record; unknown places remain unpinned. Offline matching tests pass. H4 and a live cached landmark import are needed. |
 | T4 Camera wall and triage | LIVE-UNVERIFIED | Gemini box normalization, unknown fallback and frame cache pass offline tests. Camera wall shows the 3 nearest stills with age and a gray "Not analyzed" verdict; `scripts/cache_feeds.py` saves stills for Wi-Fi-safe mode. H4 is needed for live verdicts. |
-| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | Every source always has a row; unknown is gray with its reason (test_demo_flow). Confirm writes a decision and emits `incident.confirmed`. H7 is needed for live satellite data. |
+| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | Every source always has a row, including public posts; unknown is gray with its reason. The FIRMS timer matches detections within 2 km and shows "No detection · checked HH:MM" in gray. Confirm writes a decision. H7 is needed for live satellite data. |
 | T6 Merge suggestions and undo | LIVE-UNVERIFIED | Offline tests prove suggest-only merge, human accept and undo restore the original row. |
 | T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | Closure avoidance and downwind refusal pass. Fixed a bug where a refused shelter could still be chosen. Route line is labeled "Direction only". H8 is needed for live ORS. |
 | T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Approving twice gives one dispatch and one serial write (fake records bytes). Sketch in `hardware/uno_station/`. H9 is needed for the buzz. |
-| T9 Bright Data pollers and classifier | BLOCKED | Fixture poller remains. H5 is needed for live Bright Data zones, token and dataset IDs. |
+| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | SERP and Reddit/X dataset adapters cache raw JSON to `cache/brightdata/`, dedupe by URL, skip while a call is active (tested with the network blocked), and pin only from cached landmarks as gray "unverified". Practice mode uses a labeled synthetic fixture. Needs H5: token, SERP zone, dataset IDs. Caltrans closures through the Browser API are not built; the practice closure snapshot stays. |
 | T10 JUMP IN and callback hand-back | LIVE-UNVERIFIED | `POST /api/calls/{id}/takeover` writes the summary card, then `get_guidance` returns `should_transfer=true` so the agent runs `transfer_to_number`. Hand-back calls the caller back through the ElevenLabs outbound-call adapter. Mock tests pass. H2/H3/H10 needed for a phone test. |
 | T11 Wind spread ring | LIVE-UNVERIFIED | A 100 m-cell, 10 km model grid produces a labeled 30-minute downwind estimate. The NW-wind test passes. |
 | T12 Targeted warning and rescue | LIVE-UNVERIFIED | Warning needs confirm, a ring and opted-in homes, then submits an ElevenLabs batch (mock records it). Practice mode uses fake 555 numbers when `seed/warn_list.json` is empty. Press 1 drops a rescue pin. H10 is needed for live calls. |
-| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | The isolated SQLite surge processes 75 calls into 4 incidents and writes `backend/sim/sim.json`. H6 is needed for Neon branches. |
+| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | The app runs on Postgres when `DATABASE_URL` is a postgres URL: all flow tests pass on local Postgres 16 (`AGNI_TEST_PG_URL`). `001_core.sql` adds PostGIS columns where available. `scripts/neon.py` applies the schema and creates/resets `surge-sim`; the surge uses `DATABASE_URL_SURGE`, refuses main, and gave 75 → 4 twice in a row on Postgres. Needs H6. |
 | T14 After-action report and measured proof panel | LIVE-UNVERIFIED | Close drafts one line per milestone citing its event, measures the clock from event timestamps, hashes the canonical log; a human signs. Proof panel reads only `eval.json`/`sim.json`. Gemini draft and Solana anchor need keys (Solana is a stretch). |
 | T15 Evaluation harness | LIVE-UNVERIFIED | `make eval` writes `eval.json` with n per metric. Merge precision is measured on 20 synthetic pairs. Frames, posts and caller personas show "not measured yet" until labeled data and keys exist. |
 | T16 Stretch integrations | BLOCKED | Tiger Data only if the surge counter needs it. Solana is cut in v2. |
@@ -25,11 +25,14 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 
 ## Not built yet
 
-- C2 caller camera page `/sos/cam/{token}` with the compass. `send_cam_link` still answers that the link is not available.
-- T9 Bright Data pollers for posts, closures and shelters (still BLOCKED on H5). The closure on the map is a labeled practice snapshot.
-- Timed pollers for NWS wind and FIRMS. The wind is a labeled practice value in mock mode.
-- Postgres/PostGIS migration and the Neon `surge-sim` branch switch (H6).
+- Caltrans QuickMap closures through the Bright Data Browser API (selectors must be found by hand) and shelter capacity through Web Unlocker. The map uses a labeled practice closure snapshot.
 - Stretch: Tiger Data counter, Solana memo.
+
+## Built since the first PR pass
+
+- C2 caller camera page at `/#/sos/cam/<token>`: one-time link, 30-minute expiry, camera after a tap, compass heading becomes a bearing, "Can't tell" when unsure. SMS goes only to the number that called. /ops shows a QR.
+- Timers for NWS wind, FIRMS satellite and Bright Data posts (on when `AGNI_MOCK=0` or `AGNI_POLLERS=1`; /ops can run each once).
+- Postgres/Neon support and Neon branch tooling (T13 above).
 
 ## Needs the account owner
 

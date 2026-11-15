@@ -278,7 +278,7 @@ async def resolve_call_landmark(iid: str, conversation_id: str, spoken: str) -> 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "database": "sqlite", "mode": "mock" if settings.mock else "live-unverified",
+    return {"ok": True, "database": db.backend_name(), "mode": "mock" if settings.mock else "live-unverified",
             "overflow_enabled": db.overflow_enabled(),
             "firms_key_set": bool(os.environ.get("FIRMS_MAP_KEY")),
             "brightdata_key_set": bool(os.environ.get("BRIGHTDATA_API_TOKEN") or os.environ.get("BRIGHTDATA_API_KEY"))}

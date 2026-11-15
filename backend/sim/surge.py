@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -30,11 +31,19 @@ def run(n: int = 75, max_seconds: int = 90, output: Path | None = None) -> dict:
         raise ValueError(f"The surge needs at least {len(CENTERS)} calls")
     output = output or ROOT / "backend" / "sim" / "sim.json"
     output.parent.mkdir(parents=True, exist_ok=True)
-    previous = db.DB_PATH
+    previous, previous_url = db.DB_PATH, db.DATABASE_URL
+    surge_url = os.environ.get("DATABASE_URL_SURGE", "").strip()
+    if surge_url and surge_url == os.environ.get("DATABASE_URL", "").strip():
+        raise ValueError("DATABASE_URL_SURGE points at the main database. The surge never runs on main.")
     with tempfile.TemporaryDirectory() as temp:
+        # Neon surge-sim branch when configured, otherwise a throwaway SQLite file. Never main.
         db.DB_PATH = Path(temp) / "agni-surge-sim.sqlite"
+        db.DATABASE_URL = surge_url
         try:
             db.init()
+            if surge_url:
+                from agni import ops
+                ops.reset_to_calm()  # same start every run, so two runs end with the same numbers
             started = time.monotonic()
             start_time = datetime.now(timezone.utc).replace(microsecond=0)
             accepted_merges = 0
@@ -62,7 +71,7 @@ def run(n: int = 75, max_seconds: int = 90, output: Path | None = None) -> dict:
             visible_incidents = len(db.state()["incidents"])
             result = {
                 "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "branch": "surge-sim-local",
+                "branch": ("neon:surge-sim" if "neon.tech" in surge_url else "postgres:surge") if surge_url else "surge-sim-local",
                 "calls": n,
                 "visible_incidents": visible_incidents,
                 "accepted_merges": accepted_merges,
@@ -71,7 +80,7 @@ def run(n: int = 75, max_seconds: int = 90, output: Path | None = None) -> dict:
                 "within_target": duration_s <= max_seconds,
             }
         finally:
-            db.DB_PATH = previous
+            db.DB_PATH, db.DATABASE_URL = previous, previous_url
     output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 

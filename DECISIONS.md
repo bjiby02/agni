@@ -19,3 +19,7 @@
 - The demo replay call is synthetic and labeled "Replay". It runs through the same tool handlers as a live call.
 - The console rebuilds its state from `/api/stream?since=0` on load, so a refresh restores the screen.
 - Merge precision in `eval.json` comes from 20 synthetic hand-labeled pairs, and the proof panel says so.
+- Postgres: one SQL dialect in the app, translated for Postgres in `backend/agni/pg.py` (placeholders, `strftime('now')`, `INSERT OR REPLACE/IGNORE`, two-argument `MIN`, `lastrowid`). Times stay ISO text on both so the report hash matches. PostGIS columns are generated from lat/lon when the extension exists.
+- The caller camera page is a hash route in the same console app, served by FastAPI from `frontend/dist`, so one tunnel URL covers everything.
+- Bright Data runs on a timer and waits while an inbound call from the last 15 minutes has not ended. In practice mode /ops can load the synthetic fixture at any time because it makes no network request.
+- Posts are classified by Gemini when a key is set, otherwise by a keyword fallback that is labeled as such.

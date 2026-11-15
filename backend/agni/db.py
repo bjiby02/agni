@@ -1,4 +1,4 @@
-"""Small SQLite event store for the AGNI API. Postgres can replace this adapter later."""
+"""Event store for the AGNI API: SQLite by default, Postgres/Neon when DATABASE_URL is a postgres URL."""
 from __future__ import annotations
 
 import json
@@ -12,15 +12,28 @@ from typing import Any
 _LOCK = threading.RLock()
 ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = Path(os.environ.get("AGNI_DB_PATH", ROOT / "data" / "agni-api.sqlite"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+
+def is_postgres() -> bool:
+    return DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+
+def backend_name() -> str:
+    return "postgres" if is_postgres() else "sqlite"
 
 
 @contextmanager
 def connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
+    if is_postgres():
+        from .pg import Connection
+        db = Connection(DATABASE_URL)
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
     try:
         yield db
         db.commit()
@@ -33,8 +46,12 @@ def connect():
 
 def init() -> None:
     with _LOCK, connect() as db:
-        for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql", "003_feeds.sqlite.sql"):
-            db.executescript((ROOT / "backend" / "migrations" / name).read_text())
+        if is_postgres():
+            from .pg import schema
+            db.executescript(schema())
+        else:
+            for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql", "003_feeds.sqlite.sql"):
+                db.executescript((ROOT / "backend" / "migrations" / name).read_text())
 
         count = db.execute("SELECT COUNT(*) FROM units").fetchone()[0]
         if not count:
