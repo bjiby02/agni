@@ -1,4 +1,4 @@
-"""Small SQLite event store for the AGNI API. Postgres can replace this adapter later."""
+"""Event store for the AGNI API: SQLite by default, Postgres/Neon when DATABASE_URL is a postgres URL."""
 from __future__ import annotations
 
 import json
@@ -12,15 +12,28 @@ from typing import Any
 _LOCK = threading.RLock()
 ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = Path(os.environ.get("AGNI_DB_PATH", ROOT / "data" / "agni-api.sqlite"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+
+def is_postgres() -> bool:
+    return DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+
+def backend_name() -> str:
+    return "postgres" if is_postgres() else "sqlite"
 
 
 @contextmanager
 def connect():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
+    if is_postgres():
+        from .pg import Connection
+        db = Connection(DATABASE_URL)
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
     try:
         yield db
         db.commit()
@@ -33,7 +46,12 @@ def connect():
 
 def init() -> None:
     with _LOCK, connect() as db:
-        db.executescript((ROOT / "backend" / "migrations" / "001_core.sqlite.sql").read_text())
+        if is_postgres():
+            from .pg import schema
+            db.executescript(schema())
+        else:
+            for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql", "003_feeds.sqlite.sql"):
+                db.executescript((ROOT / "backend" / "migrations" / name).read_text())
 
         count = db.execute("SELECT COUNT(*) FROM units").fetchone()[0]
         if not count:
@@ -71,13 +89,18 @@ def state() -> dict[str, Any]:
             "SELECT rings.* FROM rings JOIN (SELECT incident_id,MAX(id) AS latest_id FROM rings GROUP BY incident_id) latest "
             "ON rings.id=latest.latest_id ORDER BY rings.id DESC"
         )]
+        ops = dict(db.execute("SELECT mode,safe_mode,replay_label FROM ops_state WHERE id=1").fetchone() or {})
+        handoffs = [dict(r) for r in db.execute("SELECT id,call_id,incident_id,summary,transfer_status,started_at,ended_at,resumed_by FROM handoffs ORDER BY id DESC LIMIT 20")]
+        reports = [dict(r) for r in db.execute("SELECT incident_id,log_sha256,signed_by,signed_at,anchor_status FROM reports")]
+        rescues = [dict(r) for r in db.execute("SELECT r.id,r.incident_id,r.call_id,r.created_at FROM rescues r ORDER BY r.id DESC LIMIT 50")]
     for h in hazards:
         h["geometry"] = json.loads(h.pop("geometry_json") or "null")
     for ring in rings:
         ring["geometry"] = json.loads(ring.pop("geom_json"))
         ring["wind"] = json.loads(ring.pop("wind_json"))
     return {"incidents": incidents, "units": units, "hazards": hazards, "merges": merges,
-            "rings": rings, "last_seq": last}
+            "rings": rings, "last_seq": last, "ops": ops, "handoffs": handoffs, "reports": reports,
+            "rescues": rescues}
 
 
 def incident(iid: str) -> dict[str, Any] | None:

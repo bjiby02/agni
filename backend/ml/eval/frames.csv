@@ -1,0 +1,2 @@
+# Labeled camera stills for Gemini triage. Add rows only after a human checks each label.
+# path (relative to this folder),label (smoke|flames|no_smoke|cant_tell)

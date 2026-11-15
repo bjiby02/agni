@@ -1,0 +1,9 @@
+{
+  "type": "FeatureCollection",
+  "note": "Practice snapshot for the demo. NOT a real closure. Replace with a hand-checked Caltrans QuickMap closure once Bright Data Browser API is set up.",
+  "features": [
+    {"type": "Feature", "id": "practice-closure-1",
+     "properties": {"source": "practice snapshot", "kind": "road_closure", "title": "Practice closure · Carmel Valley Rd (not real)", "scraped_at": "2026-11-14T20:00:00Z"},
+     "geometry": {"type": "LineString", "coordinates": [[-117.215, 32.875], [-117.200, 32.892], [-117.192, 32.905]]}}
+  ]
+}

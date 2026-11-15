@@ -11,3 +11,15 @@
 - The spread ring is a labeled 30-minute, 100 m-cell estimate. It is a dispatcher review aid, not a perimeter forecast.
 - A warning batch records human approval and only selects opted-in contacts inside the reviewed ring. The current adapter never dials a phone.
 - The local surge rehearsal uses a separate temporary SQLite file and writes measured output to an ignored `backend/sim/sim.json` file.
+- Code tree: the Ares helpers AGNI uses (`swarm.py`, `geo.py`, `feeds.py`, `directory.py`) live in `backend/core/`. The rest of the old Ares app is archived in `legacy/ares/` and nothing imports it.
+- Transfer trigger: the console cannot force an ElevenLabs transfer mid-call, so JUMP IN sets `should_transfer` on `get_guidance` and the prompt tells the agent to run `transfer_to_number`. Hand-back is a callback. Both are LIVE-UNVERIFIED.
+- Caller phone numbers are stored only in `call_contacts`, used only for the callback, and scrubbed from any Gemini prompt.
+- Bearings from merged incidents cross on the surviving incident, so the estimate appears when a dispatcher accepts the merge.
+- Practice values are labeled where they show: the wind (from 20°, toward 200°), the road closure snapshot and the 555 warning numbers. None of them is presented as observed.
+- The demo replay call is synthetic and labeled "Replay". It runs through the same tool handlers as a live call.
+- The console rebuilds its state from `/api/stream?since=0` on load, so a refresh restores the screen.
+- Merge precision in `eval.json` comes from 20 synthetic hand-labeled pairs, and the proof panel says so.
+- Postgres: one SQL dialect in the app, translated for Postgres in `backend/agni/pg.py` (placeholders, `strftime('now')`, `INSERT OR REPLACE/IGNORE`, two-argument `MIN`, `lastrowid`). Times stay ISO text on both so the report hash matches. PostGIS columns are generated from lat/lon when the extension exists.
+- The caller camera page is a hash route in the same console app, served by FastAPI from `frontend/dist`, so one tunnel URL covers everything.
+- Bright Data runs on a timer and waits while an inbound call from the last 15 minutes has not ended. In practice mode /ops can load the synthetic fixture at any time because it makes no network request.
+- Posts are classified by Gemini when a key is set, otherwise by a keyword fallback that is labeled as such.

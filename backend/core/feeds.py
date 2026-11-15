@@ -15,7 +15,7 @@ import pathlib
 import urllib.parse
 import urllib.request
 
-UA = "AGNIRescue/1.0 (disaster voice dispatch)"
+UA = os.environ.get("NWS_USER_AGENT", "").strip() or "AGNIRescue/1.0 (disaster voice dispatch)"  # NWS asks for a contact
 
 WIND_TTL = 900.0        # NWS observations update roughly every 20 min
 CAMERA_TTL = 21600.0    # camera positions are static; the images are not

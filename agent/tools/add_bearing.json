@@ -1,0 +1,33 @@
+{
+  "name": "add_bearing",
+  "description": "Call when the caller says which way the smoke is.",
+  "type": "webhook",
+  "api_schema": {
+    "url": "{PUBLIC_BASE_URL}/api/tools/add_bearing",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{ELEVENLABS_TOOL_SECRET}"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "direction_words"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "{{system__conversation_id}}"
+        },
+        "direction_words": {
+          "type": "string",
+          "description": "Caller's words: toward the ocean, inland, north, behind the school"
+        },
+        "bearing_deg": {
+          "type": "number",
+          "description": "Only if the caller's phone compass gave a heading"
+        }
+      }
+    }
+  }
+}

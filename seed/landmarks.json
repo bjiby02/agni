@@ -2,7 +2,12 @@
   {
     "id": "mock-vons-carmel-valley",
     "name": "Vons Carmel Valley",
-    "aliases": ["Carmel Valley Vons", "Vons at Carmel Valley"],
+    "aliases": [
+      "Carmel Valley Vons",
+      "Vons at Carmel Valley",
+      "Vons de Carmel Valley",
+      "Vons in Carmel Valley"
+    ],
     "kind": "store",
     "lat": 32.91,
     "lon": -117.17,

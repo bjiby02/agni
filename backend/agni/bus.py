@@ -6,7 +6,8 @@ EVENT_TYPES = {
     "incident.merged", "triage.result", "route.ready", "unit.dispatched", "handoff.started",
     "handoff.ended", "ring.updated", "warning.sent", "surge.stats", "incident.closed",
     "bearing.added", "estimate.updated", "cameras.selected", "satellite.result",
-    "evidence.updated", "rescue.requested",
+    "evidence.updated", "rescue.requested", "incident.confirmed", "incident.unmerged",
+    "wind.updated", "hazards.updated", "log.anchored", "ops.mode",
 }
 
 

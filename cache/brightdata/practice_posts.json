@@ -1,0 +1,10 @@
+{
+  "label": "Practice fixture · synthetic posts written for the demo, not real people",
+  "items": [
+    {"source": "reddit", "url": "https://practice.invalid/r/sandiego/1", "text": "Anyone else seeing smoke behind the Vons in Carmel Valley? Pretty dark.", "minutes_ago": 6},
+    {"source": "x", "url": "https://practice.invalid/x/2", "text": "Smoke column over the hill near Carmel Valley right now", "minutes_ago": 4},
+    {"source": "serp", "url": "https://practice.invalid/news/3", "text": "Crews respond to reports of a brush fire in San Diego County", "minutes_ago": 9},
+    {"source": "reddit", "url": "https://practice.invalid/r/sandiego/4", "text": "Best tacos in North Park? Asking for a friend", "minutes_ago": 3},
+    {"source": "x", "url": "https://practice.invalid/x/5", "text": "Throwback to the 2007 fires, glad that's behind us", "minutes_ago": 30}
+  ]
+}

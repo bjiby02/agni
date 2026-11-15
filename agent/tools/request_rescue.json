@@ -1,0 +1,40 @@
+{
+  "name": "request_rescue",
+  "description": "Warning agent only: the person pressed 1 or said they need help leaving.",
+  "type": "webhook",
+  "api_schema": {
+    "url": "{PUBLIC_BASE_URL}/api/tools/request_rescue",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{ELEVENLABS_TOOL_SECRET}"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "{{system__conversation_id}}"
+        },
+        "digits": {
+          "type": "string",
+          "description": "Keypad digits pressed"
+        },
+        "said_help": {
+          "type": "boolean",
+          "description": "They said they need help"
+        },
+        "incident_id": {
+          "type": "string",
+          "description": "{{incident_id}}"
+        },
+        "home_id": {
+          "type": "string",
+          "description": "{{home_id}}"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-.PHONY: test dev seed demo eval live-check
+.PHONY: test dev seed demo eval live-check surge agents
 
 test:
 	cd backend && AGNI_MOCK=1 python3 -m unittest discover -s tests -v
@@ -10,10 +10,13 @@ seed:
 	cd backend && python3 -c 'from agni.db import init; init()'
 
 demo:
-	@echo "Demo replay is not implemented yet. See STATUS.md (T17)."
+	cd backend && AGNI_MOCK=1 python3 ../scripts/demo.py
 
 eval:
-	@echo "Evaluation harness is not implemented yet. See STATUS.md (T15)."
+	cd backend && python3 ml/eval/run_eval.py
+
+agents:
+	python3 scripts/create_agents.py
 
 surge:
 	cd backend && AGNI_MOCK=1 python3 sim/surge.py --n 75 --seconds 90

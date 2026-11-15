@@ -29,6 +29,23 @@ npm run dev
 
 Open the Vite address. To show live camera stills and public feeds, set `AGNI_MOCK=0` in local `.env`. Live integrations remain unverified until the live checks pass.
 
+## Run the demo (mock mode, no keys)
+
+```sh
+make demo      # plays every storyboard beat against the real API code, about 2 s
+make eval      # writes backend/ml/eval/eval.json for the proof panel
+make surge     # 75-call rehearsal on a separate database, writes backend/sim/sim.json
+```
+
+With `make dev` and the console running, `make demo` uses the same database, so the console shows each beat as it happens. The presenter screen is at `#/ops` in the console: Reset to Calm, a labeled replay call, the surge and Wi-Fi-safe mode. Before a demo without Wi-Fi, run `python3 scripts/cache_feeds.py` once on a networked laptop to save camera stills.
+
+## Going live
+
+1. Fill `.env` (see `.env.example`). Never paste keys in chat.
+2. `make live-check` runs one real request per service whose key is set and saves each response in `backend/tests/fixtures/live/`.
+3. `python3 scripts/create_agents.py` prints both ElevenLabs agents; add `--create` to create them, then put the printed ids in `.env`.
+4. Set `AGNI_MOCK=0` and start the API behind a tunnel at `PUBLIC_BASE_URL`.
+
 ## Work status
 
 See [STATUS.md](STATUS.md) for task progress, live verification and setup that needs an account owner. See [DECISIONS.md](DECISIONS.md) for implementation choices.

@@ -1,6 +1,7 @@
 """Swarm inference. Callers corroborate each other, or they do not count."""
 import sys, pathlib
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "core"))
+import unittest
 
 import swarm
 from swarm import Report
@@ -68,3 +69,12 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
     print("ok")
+
+
+def load_tests(loader, tests, pattern):
+    """Run the plain test functions under unittest, so `make test` covers them."""
+    suite = unittest.TestSuite()
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            suite.addTest(unittest.FunctionTestCase(fn, description=name))
+    return suite

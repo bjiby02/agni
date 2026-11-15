@@ -1,0 +1,41 @@
+{
+  "name": "report_fire",
+  "description": "Call as soon as the caller gives any place. Creates or joins an incident.",
+  "type": "webhook",
+  "api_schema": {
+    "url": "{PUBLIC_BASE_URL}/api/tools/report_fire",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{ELEVENLABS_TOOL_SECRET}"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "required": [
+        "conversation_id",
+        "address_text"
+      ],
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "description": "{{system__conversation_id}}"
+        },
+        "address_text": {
+          "type": "string",
+          "description": "Street, cross street, or landmark in caller's words"
+        },
+        "what_seen": {
+          "type": "string",
+          "description": "smoke | flames | glow | smell"
+        },
+        "language": {
+          "type": "string",
+          "description": "ISO code like en, es"
+        },
+        "caller_phone": {
+          "type": "string",
+          "description": "{{system__caller_id}}. Used only to call the caller back."
+        }
+      }
+    }
+  }
+}

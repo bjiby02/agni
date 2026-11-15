@@ -1,0 +1,2 @@
+# Labeled public posts for classify_post. Add rows only after a human checks each label.
+# text,is_fire_report (1|0)

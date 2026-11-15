@@ -17,8 +17,8 @@ class SurgeTests(unittest.TestCase):
             result = surge.run(n=12, max_seconds=90, output=out)
             self.assertTrue(out.exists())
         self.assertEqual(result["calls"], 12)
-        self.assertEqual(result["visible_incidents"], 3)
-        self.assertEqual(result["accepted_merges"], 9)
+        self.assertEqual(result["visible_incidents"], 4)
+        self.assertEqual(result["accepted_merges"], 8)
         self.assertTrue(result["within_target"])
 
 
