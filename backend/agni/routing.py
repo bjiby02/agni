@@ -92,6 +92,8 @@ def configured_refuges() -> list[dict[str, Any]]:
 
 def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] | None, wind_to_deg: float | None) -> dict[str, Any]:
     """Use geo.py to screen configured refuges; expose every downwind refusal."""
+    from . import brightdata_story
+
     shelters = configured_refuges() if shelters is None else shelters
     places: list[geo.Place] = []
     refused = []
@@ -109,5 +111,18 @@ def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] |
     selected = geo.choose(origin, places, None, need="fire", drift=wind_to_deg)
     if selected is None:
         return {"shelter": None, "refused": refused}
-    return {"shelter": {"name": selected.name, "lat": selected.lat, "lon": selected.lon,
-                         "distance_m": round(selected.meters), "bearing_deg": round(selected.bearing)}, "refused": refused}
+    payload = {
+        "name": selected.name, "lat": selected.lat, "lon": selected.lon,
+        "distance_m": round(selected.meters), "bearing_deg": round(selected.bearing),
+    }
+    cap = brightdata_story.shelter_capacity_for(selected.name)
+    if cap:
+        payload.update({
+            "capacity": cap.get("capacity"),
+            "occupancy": cap.get("occupancy"),
+            "room": cap.get("room"),
+            "status": cap.get("status"),
+            "capacity_source": "brightdata_browser",
+            "capacity_label": "Shelter capacity from Bright Data",
+        })
+    return {"shelter": payload, "refused": refused}

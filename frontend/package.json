@@ -1,5 +1,5 @@
 {
-  "name": "agni-command-console",
+  "name": "agni-console",
   "private": true,
   "version": "0.1.0",
   "type": "module",

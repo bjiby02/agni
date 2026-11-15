@@ -13,11 +13,15 @@ def why_line(rows: list[dict[str, Any]], max_len: int = 60) -> str:
         source = str(row.get("source") or "")
         detail = str(row.get("detail") or "").strip()
         if source in {"callers", "caller_location"}:
-            parts.append(detail[:28] if detail else "caller report")
+            # Prefer short readable phrases over mid-word truncation
+            if "landmark" in detail.lower() or "matched" in detail.lower():
+                parts.append("landmark match")
+            else:
+                parts.append((detail[:40] if detail else "caller report").rstrip())
         elif source == "cameras":
-            parts.append(detail[:28] if detail else "camera smoke")
+            parts.append(detail[:40] if detail else "camera smoke")
         elif source == "wind":
-            parts.append(detail[:24] if detail else "wind")
+            parts.append(detail[:28] if detail else "wind")
         elif source in {"reddit", "x", "serp", "posts"}:
             parts.append("crowd post")
         elif source == "firms":
@@ -36,7 +40,8 @@ def default_rows(firms_key_set: bool = False) -> list[dict[str, Any]]:
     return [
         {"source": "callers", "state": "empty", "detail": "No caller bearings yet", "age_s": None},
         {"source": "cameras", "state": "empty", "detail": "Camera feed not checked yet", "age_s": None},
-        {"source": "wind", "state": "empty", "detail": "Wind feed not checked yet", "age_s": None},
+        {"source": "posts", "state": "empty", "detail": "No public posts in the last hour", "age_s": None},
         {"source": "firms", "state": firms_state, "detail": firms_detail, "age_s": None},
         {"source": "nifc", "state": "empty", "detail": "No perimeter mapped; this does not rule out fire", "age_s": None},
+        {"source": "wind", "state": "empty", "detail": "Wind feed not checked yet", "age_s": None},
     ]

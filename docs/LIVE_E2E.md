@@ -36,14 +36,22 @@ cd frontend && npm run dev
 make live-check          # one real request per keyed service
 ```
 
-## 3. Live judge path
+## 3. Console (storyboard HUD)
 
-1. Turn overflow ON in the console.
+Open **http://127.0.0.1:5173** (must be the Vite from `/Users/bijinjiby/AGNI/frontend`, not another checkout).
+
+You should see: full-bleed dark map, floating Fires list with `why_line`, gray unknown evidence, LIVE ALERTCalifornia camera strip, red **JUMP IN**, keys `↵ C A J R W M/N U`.
+
+The UI is event-driven: phone tools → SSE → fire row + transcript. It is not a static mock.
+
+## 4. Live judge path
+
+1. Turn overflow ON in the console (top-right pill).
 2. Judge dials the Twilio/ElevenLabs number.
-3. Agent tools hit `PUBLIC_BASE_URL/api/tools/*`.
-4. Dispatcher Confirm → Approve (serial `D42`) → JUMP IN → Hand back (callback) → ring → Send warning (batch call) → Press 1 → rescue pin → Sign & close.
+3. Agent tools hit `PUBLIC_BASE_URL/api/tools/*` → console shows `call.started` / fire row within ~1 s.
+4. Dispatcher: **Confirm** → route card → **Approve dispatch** → **JUMP IN** → Hand back → **R** ring → **W** Send warning → Press 1 → rescue pin → **S** Sign & close.
 
-## 4. Safety
+## 5. Safety
 
 - Outbound calls only to numbers in `seed/warn_list.json` with `opted_in: true`.
 - Humans still Confirm / Approve / Send.

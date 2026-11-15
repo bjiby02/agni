@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "add_bearing",
-  "description": "Record a spoken or compass bearing toward smoke.",
+  "description": "Call when the caller says which way the smoke is.",
   "api_schema": {
     "url": "{{PUBLIC_BASE_URL}}/api/tools/add_bearing",
     "method": "POST",
@@ -11,15 +11,17 @@
     },
     "request_body_schema": {
       "type": "object",
+      "required": ["conversation_id", "direction_words"],
       "properties": {
-        "conversation_id": { "type": "string" },
-        "direction_words": { "type": "string" },
-        "bearing_deg": { "type": "number" },
-        "lat": { "type": "number" },
-        "lon": { "type": "number" },
-        "source": { "type": "string" }
-      },
-      "required": ["conversation_id"]
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "direction_words": {
+          "type": "string",
+          "description": "Caller's words, e.g. 'northeast', 'inland', 'toward the ocean'"
+        }
+      }
     }
   }
 }

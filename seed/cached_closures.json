@@ -1,0 +1,32 @@
+[
+  {
+    "id": "hz_bd_genesee",
+    "source": "brightdata_quickmap",
+    "kind": "road_closure",
+    "title": "Genesee Ave lane closure (Caltrans QuickMap)",
+    "lat": 32.865,
+    "lon": -117.25,
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [[
+        [-117.255, 32.868], [-117.245, 32.868],
+        [-117.245, 32.862], [-117.255, 32.862], [-117.255, 32.868]
+      ]]
+    }
+  },
+  {
+    "id": "hz_bd_carmel_valley",
+    "source": "brightdata_quickmap",
+    "kind": "road_closure",
+    "title": "Carmel Valley Rd intermittent closure (Caltrans QuickMap)",
+    "lat": 32.92,
+    "lon": -117.23,
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [[
+        [-117.238, 32.924], [-117.222, 32.924],
+        [-117.222, 32.916], [-117.238, 32.916], [-117.238, 32.924]
+      ]]
+    }
+  }
+]

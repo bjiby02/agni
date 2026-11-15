@@ -48,6 +48,14 @@ def init() -> None:
                 ("E17", "Engine 17", "structure", 32.875, -117.266, "available"),
                 ("R08", "Rescue 8", "rescue", 32.853, -117.225, "available"),
             ])
+        # Landmark cache: seed/landmarks.json (+ optional Bright Data fixture). Locate() hits this first.
+        try:
+            from . import landmarks as landmark_service
+            n = landmark_service.seed_landmarks_table(db)
+            if n:
+                print(f"landmarks seeded: {n}", flush=True)
+        except Exception as exc:
+            print(f"landmarks seed failed: {exc}", flush=True)
 
 
 def event(type_: str, incident_id: str | None, data: dict[str, Any]) -> dict[str, Any]:
@@ -83,8 +91,23 @@ def state() -> dict[str, Any]:
         except Exception:
             signals = []
         calls = [dict(r) for r in db.execute(
-            "SELECT id,incident_id,direction,language,state,landmark_text,started_at FROM calls "
+            "SELECT id,incident_id,direction,language,state,landmark_text,started_at,ended_at,"
+            "phone_last4,phone_e164,needs_json FROM calls "
             "WHERE state IN ('live','human') ORDER BY started_at DESC")]
+        for c in calls:
+            try:
+                needs = json.loads(c.pop("needs_json") or "{}")
+            except Exception:
+                needs = {}
+            c["needs"] = needs
+            c["needs_human"] = bool(needs.get("needs_human"))
+            c["needs_human_reason"] = needs.get("needs_human_reason")
+            # Recent spoken lines so the console can hydrate without waiting on SSE.
+            rows = [dict(r) for r in db.execute(
+                "SELECT speaker,text,lang,ts FROM transcripts WHERE call_id=? ORDER BY id DESC LIMIT 20",
+                (c["id"],),
+            )]
+            c["transcript"] = list(reversed(rows))
     for h in hazards:
         h["geometry"] = json.loads(h.pop("geometry_json") or "null")
     for ring in rings:

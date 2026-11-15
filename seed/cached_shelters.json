@@ -1,0 +1,35 @@
+[
+  {
+    "id": "shelter_rimac",
+    "name": "RIMAC Field assembly area",
+    "lat": 32.8868,
+    "lon": -117.2396,
+    "capacity": 400,
+    "occupancy": 62,
+    "status": "open",
+    "source": "brightdata_browser",
+    "source_label": "Bright Data · shelter pages"
+  },
+  {
+    "id": "shelter_torrey_center",
+    "name": "Torrey Pines Center assembly area",
+    "lat": 32.889,
+    "lon": -117.232,
+    "capacity": 180,
+    "occupancy": 41,
+    "status": "open",
+    "source": "brightdata_browser",
+    "source_label": "Bright Data · shelter pages"
+  },
+  {
+    "id": "shelter_warren",
+    "name": "Warren Mall assembly area",
+    "lat": 32.881,
+    "lon": -117.2358,
+    "capacity": 220,
+    "occupancy": 18,
+    "status": "open",
+    "source": "brightdata_browser",
+    "source_label": "Bright Data · shelter pages"
+  }
+]

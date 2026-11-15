@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "report_fire",
-  "description": "Create or update a fire report from landmark words. Never invent coordinates.",
+  "description": "Call as soon as the caller names anything near them. Creates an incident (merges are only suggested to the dispatcher).",
   "api_schema": {
     "url": "{{PUBLIC_BASE_URL}}/api/tools/report_fire",
     "method": "POST",
@@ -11,13 +11,37 @@
     },
     "request_body_schema": {
       "type": "object",
+      "required": ["conversation_id", "landmark_text"],
       "properties": {
-        "conversation_id": { "type": "string" },
-        "landmark_text": { "type": "string" },
-        "what_seen": { "type": "string" },
-        "language": { "type": "string" }
-      },
-      "required": ["conversation_id", "landmark_text"]
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "landmark_text": {
+          "type": "string",
+          "description": "Caller's exact words about where they are: store, school, church, park, road"
+        },
+        "what_seen": {
+          "type": "string",
+          "description": "smoke | flames | glow | smell"
+        },
+        "language": {
+          "type": "string",
+          "description": "ISO code like en, es"
+        },
+        "lat": {
+          "type": "number",
+          "description": "Caller latitude if known from the phone/client. Never invent."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Caller longitude if known from the phone/client. Never invent."
+        },
+        "phone": {
+          "type": "string",
+          "description": "Caller E.164 if the telephony stack provides it"
+        }
+      }
     }
   }
 }

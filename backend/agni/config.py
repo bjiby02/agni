@@ -19,7 +19,7 @@ class Settings:
     operator_token: str = os.environ.get("OPERATOR_TOKEN", "")
     tool_secret: str = os.environ.get("ELEVENLABS_TOOL_SECRET", "")
     database_url: str = os.environ.get("DATABASE_URL", "sqlite:///data/agni-api.sqlite")
-    demo_replay: bool = _flag("DEMO_REPLAY", True)
+    demo_replay: bool = _flag("DEMO_REPLAY", False)
     public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
 
 

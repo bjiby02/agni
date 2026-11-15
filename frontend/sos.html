@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AGNI · Point at the smoke</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100dvh;
+      background: #050607;
+      color: #f4f6f8;
+      font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+    .stage { position: relative; width: 100vw; height: 100dvh; background: #000; }
+    video, canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; background: #111;
+    }
+    canvas { display: none; }
+    .hud {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      justify-content: space-between; padding: max(16px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+      pointer-events: none;
+    }
+    .hud > * { pointer-events: auto; }
+    .top {
+      background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px; padding: 14px 16px; backdrop-filter: blur(10px);
+    }
+    .top h1 { font-size: 1.15rem; font-weight: 700; margin-bottom: 4px; }
+    .top p { color: #9aa3ad; font-size: 0.92rem; }
+    .status {
+      margin-top: 8px; font: 600 12px/1.3 ui-monospace, monospace;
+      letter-spacing: 0.04em; text-transform: uppercase; color: #f0a500;
+    }
+    .status.ok { color: #d7dde3; }
+    .status.bad { color: #ff3b30; }
+    .compass {
+      align-self: center; width: 64px; height: 64px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35); display: grid; place-items: center;
+      background: rgba(0,0,0,0.45); font-size: 28px;
+      transform: rotate(var(--heading, 0deg));
+    }
+    .actions { display: grid; gap: 10px; }
+    button {
+      border: 0; border-radius: 14px; padding: 16px 14px; font: 700 1rem/1.2 inherit;
+      background: #f4f6f8; color: #0a0c0e;
+    }
+    button.ghost {
+      background: rgba(255,255,255,0.08); color: #f4f6f8;
+      border: 1px solid rgba(255,255,255,0.14);
+    }
+    button:disabled { opacity: 0.45; }
+    .note { color: #6b737c; font-size: 0.8rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <video id="preview" playsinline autoplay muted></video>
+    <canvas id="snap"></canvas>
+    <div class="hud">
+      <div class="top">
+        <h1>Help is on the way</h1>
+        <p>Point your camera at the smoke. AGNI will check the still — it never confirms a fire by itself.</p>
+        <div class="status" id="status">Starting camera…</div>
+      </div>
+      <div class="compass" id="compass" aria-hidden="true">↑</div>
+      <div class="actions">
+        <button type="button" id="safe">I'm safe to leave</button>
+        <button type="button" class="ghost" id="callback">Call me back</button>
+        <p class="note">Stills go to AGNI every few seconds while this page is open.</p>
+      </div>
+    </div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const iid = location.pathname.split('/').filter(Boolean).pop();
+    const token = params.get('t') || '';
+    const API = location.origin;
+    const statusEl = document.getElementById('status');
+    const video = document.getElementById('preview');
+    const canvas = document.getElementById('snap');
+    const compass = document.getElementById('compass');
+    let heading = null;
+    let sending = false;
+    let lastLabel = '';
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        video.srcObject = stream;
+        setStatus('Camera live · pointing at smoke', 'ok');
+      } catch (err) {
+        setStatus('Camera blocked — allow camera access and reload', 'bad');
+      }
+    }
+
+    function captureJpeg() {
+      if (!video.videoWidth) return null;
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+      return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.72));
+    }
+
+    async function sendFrame() {
+      if (sending) return;
+      const blob = await captureJpeg();
+      if (!blob) return;
+      sending = true;
+      try {
+        const res = await fetch(`${API}/api/sos/${encodeURIComponent(iid)}/frame?t=${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'image/jpeg' },
+          body: blob,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Upload failed');
+        lastLabel = data.label || 'cant_tell';
+        const reason = data.reason || '';
+        if (lastLabel === 'smoke' || lastLabel === 'flames') {
+          setStatus(`Gemini: possible ${lastLabel}. A human still decides.`, 'ok');
+        } else if (lastLabel === 'no_smoke') {
+          setStatus('Gemini: no smoke visible in this still.', 'ok');
+        } else {
+          setStatus(reason ? `Gemini: can't tell — ${reason}` : "Gemini: can't tell from the image.", 'ok');
+        }
+      } catch (err) {
+        setStatus(String(err.message || err), 'bad');
+      } finally {
+        sending = false;
+      }
+    }
+
+    async function sendBearing() {
+      if (heading == null || !navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition(async pos => {
+        try {
+          await fetch(`${API}/api/sos/${encodeURIComponent(iid)}/bearing?t=${encodeURIComponent(token)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+              heading_deg: heading,
+            }),
+          });
+        } catch (_) { /* ignore */ }
+      }, () => {}, { maximumAge: 10000, timeout: 5000 });
+    }
+
+    function onOrient(ev) {
+      const h = ev.webkitCompassHeading != null ? ev.webkitCompassHeading : (360 - (ev.alpha || 0));
+      if (Number.isFinite(h)) {
+        heading = ((h % 360) + 360) % 360;
+        compass.style.setProperty('--heading', `${heading}deg`);
+      }
+    }
+
+    document.getElementById('safe').onclick = () => {
+      setStatus('Noted — stay safe. You can close this page.', 'ok');
+    };
+    document.getElementById('callback').onclick = () => {
+      setStatus('Callback requested — keep your phone on.', 'ok');
+      fetch(`${API}/api/sos/${encodeURIComponent(iid)}/callback?t=${encodeURIComponent(token)}`, { method: 'POST' }).catch(() => {});
+    };
+
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      DeviceOrientationEvent.requestPermission().then(state => {
+        if (state === 'granted') window.addEventListener('deviceorientation', onOrient, true);
+      }).catch(() => {});
+    } else {
+      window.addEventListener('deviceorientation', onOrient, true);
+    }
+
+    startCamera();
+    setInterval(sendFrame, 3500);
+    setInterval(sendBearing, 8000);
+    setTimeout(sendFrame, 1200);
+  </script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "get_guidance",
-  "description": "Read cached guidance. Speak ETA only if eta_s is present.",
+  "description": "Call after collecting info, and every time the caller asks what to do.",
   "api_schema": {
     "url": "{{PUBLIC_BASE_URL}}/api/tools/get_guidance",
     "method": "POST",
@@ -11,10 +11,13 @@
     },
     "request_body_schema": {
       "type": "object",
+      "required": ["conversation_id"],
       "properties": {
-        "conversation_id": { "type": "string" }
-      },
-      "required": ["conversation_id"]
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        }
+      }
     }
   }
 }

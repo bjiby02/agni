@@ -1,5 +1,11 @@
 # secrets and local state
 .env
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 data/*.db
 data/*.db-wal
 data/*.db-shm
@@ -7,6 +13,9 @@ data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
 data/agni-demo.sqlite*
+agni.db
+backend/agni.db
+backend/icarus.db
 data/api_token
 backend/tests/fixtures/live/
 devcert/

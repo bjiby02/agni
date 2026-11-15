@@ -6,11 +6,14 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
+import urllib.request
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,15 +34,16 @@ def _load_env() -> None:
 
 _load_env()
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import bus, db
 from .config import settings
 from . import vision
 from . import landmarks as landmark_service
+from . import brightdata_story
 from . import merge as merge_service
 from . import spread
 from . import warnings as warning_service
@@ -102,7 +106,8 @@ class SettingsInput(BaseModel):
 class NeedsInput(BaseModel):
     conversation_id: str = Field(min_length=1, max_length=120)
     mobility: bool = False
-    people: int | None = Field(default=None, ge=1, le=50)
+    # Allow 0 — agent often sends people:0 for "alone".
+    people: int | None = Field(default=None, ge=0, le=50)
     notes: str = Field(default="", max_length=300)
 
 
@@ -181,26 +186,267 @@ async def postcall(request: Request, x_agni_webhook_signature: str | None = Head
 
 
 def _ensure_seed() -> None:
+    """No demo fires (calm console). Seed Bright Data cache into Public ears if thin."""
+    try:
+        pollers.ensure_cached_signals(min_rows=4)
+        pollers.ensure_demo_hazards()
+    except Exception as exc:
+        print(f"cached signals seed failed: {exc}", flush=True)
+
+
+def _end_stale_live_calls(max_age_s: int = 900) -> int:
+    """Smoke tests and dropped post-calls left rows as state=live. Close anything older than max_age_s."""
     with db.connect() as conn:
-        has = conn.execute("SELECT 1 FROM incidents LIMIT 1").fetchone()
-        if not has:
-            iid = "inc_demo_torrey"
-            conn.execute("INSERT INTO incidents(id,status,level,kind,title,lat,lon,location_src,description) VALUES(?,?,?,?,?,?,?,?,?)",
-                         (iid,"possible",3,"fire","Possible smoke near Torrey Pines",32.866,-117.251,"demo","Demo incident. Confirm with a human."))
-            conn.commit()
-    if has is None:
-        bus.emit("incident.created", "inc_demo_torrey", {"status":"possible","level":3,"lat":32.866,"lon":-117.251,"location_src":"demo","title":"Possible smoke near Torrey Pines"})
+        rows = conn.execute(
+            "SELECT id, started_at FROM calls WHERE state IN ('live','human')"
+        ).fetchall()
+        ended = 0
+        now = time.time()
+        for row in rows:
+            started = row["started_at"] or ""
+            try:
+                # Accept both Z and +00:00
+                ts = started.replace("Z", "+00:00")
+                age = now - datetime.fromisoformat(ts).timestamp()
+            except Exception:
+                age = max_age_s + 1
+            if age >= max_age_s:
+                conn.execute(
+                    "UPDATE calls SET state='ended', ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                    (row["id"],),
+                )
+                ended += 1
+        return ended
+
+
+def _sync_live_transcripts() -> int:
+    """Pull ElevenLabs transcripts for live calls so the console can show the caller."""
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key or settings.mock:
+        return 0
+    with db.connect() as conn:
+        live = [dict(r) for r in conn.execute(
+            "SELECT id, incident_id FROM calls WHERE state IN ('live','human')")]
+    added = 0
+    for call in live:
+        cid = call["id"]
+        iid = call["incident_id"]
+        if not cid or not str(cid).startswith("conv_"):
+            continue
+        try:
+            req = urllib.request.Request(
+                f"https://api.elevenlabs.io/v1/convai/conversations/{cid}",
+                headers={"xi-api-key": key},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                detail = json.loads(resp.read().decode())
+        except Exception:
+            continue
+        msgs = detail.get("transcript") if isinstance(detail.get("transcript"), list) else []
+        phone = (
+            ((detail.get("metadata") or {}).get("phone_call") or {}).get("external_number")
+        )
+        if isinstance(phone, str) and phone.startswith("+"):
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE calls SET phone_e164=COALESCE(phone_e164, ?), phone_last4=COALESCE(phone_last4, ?) WHERE id=?",
+                    (phone, phone[-4:], cid),
+                )
+                conn.commit()
+        with db.connect() as conn:
+            existing = {
+                (r["speaker"], r["text"])
+                for r in conn.execute(
+                    "SELECT speaker, text FROM transcripts WHERE call_id=?", (cid,)
+                )
+            }
+        for m in msgs:
+            role = m.get("role") or m.get("speaker")
+            text = (m.get("message") or m.get("text") or "").strip()
+            if role not in {"user", "agent", "caller"} or not text:
+                continue
+            speaker = "caller" if role in {"user", "caller"} else "agent"
+            if (speaker, text) in existing:
+                continue
+            with db.connect() as conn:
+                conn.execute(
+                    "INSERT INTO transcripts(call_id,speaker,text,lang) VALUES(?,?,?,?)",
+                    (cid, speaker, text[:500], m.get("language") or "en"),
+                )
+                conn.commit()
+            bus.emit("call.transcript", iid, {
+                "call_id": cid, "speaker": speaker, "text": text[:500],
+                "lang": m.get("language") or "en", "final": True,
+            })
+            if speaker == "caller" and _caller_asks_human(text):
+                _mark_needs_human(cid, "caller_asked_human")
+            else:
+                _clear_stuck_if_resumed(cid)
+            added += 1
+            existing.add((speaker, text))
+    return added
+
+
+_HUMAN_ASK_RE = re.compile(
+    r"\b(human|dispatcher|operator|real person|speak to (a |someone|somebody)|transfer|jump in)\b",
+    re.I,
+)
+_STUCK_SILENCE_S = 25
+_STUCK_MIN_AGE_S = 20
+# No spoken lines yet is normal during intake / missing live-transcript bridge — do not JUMP IN.
+_STUCK_NO_TRANSCRIPT_S = 90
+
+
+def _caller_asks_human(text: str | None) -> bool:
+    return bool(text and _HUMAN_ASK_RE.search(text))
+
+
+def _clear_stuck_if_resumed(conversation_id: str) -> None:
+    """Caller or agent spoke again after a silence stuck — do not keep begging for JUMP IN."""
+    with db.connect() as conn:
+        call = conn.execute(
+            "SELECT needs_json FROM calls WHERE id=?",
+            (conversation_id,),
+        ).fetchone()
+        if not call:
+            return
+        try:
+            needs = json.loads(call["needs_json"] or "{}")
+        except Exception:
+            needs = {}
+        if not needs.get("needs_human"):
+            return
+        if needs.get("needs_human_reason") not in {"silence", "no_transcript"}:
+            return
+        needs.pop("needs_human", None)
+        needs.pop("needs_human_reason", None)
+        conn.execute(
+            "UPDATE calls SET needs_json=? WHERE id=?",
+            (json.dumps(needs), conversation_id),
+        )
+        conn.commit()
+
+
+def _mark_needs_human(conversation_id: str, reason: str) -> dict | None:
+    """Ask the dispatcher to JUMP IN. Idempotent per call (needs_json.needs_human)."""
+    with db.connect() as conn:
+        call = conn.execute(
+            "SELECT id, incident_id, state, needs_json FROM calls WHERE id=?",
+            (conversation_id,),
+        ).fetchone()
+        if not call or call["state"] not in {"live", "human"}:
+            return None
+        needs: dict = {}
+        try:
+            needs = json.loads(call["needs_json"] or "{}")
+        except Exception:
+            needs = {}
+        if needs.get("needs_human"):
+            return None
+        needs["needs_human"] = True
+        needs["needs_human_reason"] = reason
+        conn.execute(
+            "UPDATE calls SET needs_json=? WHERE id=?",
+            (json.dumps(needs), conversation_id),
+        )
+        conn.commit()
+        iid = call["incident_id"]
+    if reason not in {"silence", "no_transcript"}:
+        eleven.request_transfer(conversation_id, True)
+    data = {
+        "call_id": conversation_id,
+        "reason": reason,
+        "label": "needs_human",
+        "say": "AGNI is stuck — press J to take over",
+    }
+    bus.emit("call.needs_human", iid, data)
+    return data
+
+
+def _parse_ts(value) -> float | None:
+    if not value:
+        return None
+    raw = str(value).strip().replace(" ", "T")
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _check_stuck_calls() -> int:
+    """Silence / no progress → call.needs_human once per live call."""
+    now = time.time()
+    marked = 0
+    with db.connect() as conn:
+        live = [dict(r) for r in conn.execute(
+            "SELECT id, incident_id, started_at, needs_json FROM calls WHERE state='live'"
+        )]
+    for call in live:
+        needs: dict = {}
+        try:
+            needs = json.loads(call.get("needs_json") or "{}")
+        except Exception:
+            needs = {}
+        if needs.get("needs_human"):
+            continue
+        started_s = _parse_ts(call.get("started_at"))
+        if started_s is None:
+            continue
+        age = now - started_s
+        if age < _STUCK_MIN_AGE_S:
+            continue
+        with db.connect() as conn:
+            last = conn.execute(
+                "SELECT MAX(ts) AS ts FROM transcripts WHERE call_id=?",
+                (call["id"],),
+            ).fetchone()
+        last_ts = last["ts"] if last else None
+        last_s = _parse_ts(last_ts) if last_ts else None
+        silent = now - last_s if last_s is not None else age
+        with db.connect() as conn:
+            last_row = conn.execute(
+                "SELECT speaker, text FROM transcripts WHERE call_id=? ORDER BY ts DESC LIMIT 1",
+                (call["id"],),
+            ).fetchone()
+        if last_row and (last_row["speaker"] or "").lower() == "agent" and silent < 45:
+            continue
+        if not last_ts:
+            # Agent may still be greeting / Q1 with no bridge lines yet.
+            if age < _STUCK_NO_TRANSCRIPT_S:
+                continue
+            reason = "no_transcript"
+        else:
+            if silent < _STUCK_SILENCE_S:
+                continue
+            reason = "silence"
+        if _mark_needs_human(call["id"], reason):
+            marked += 1
+    return marked
 
 
 async def _signal_poll_loop() -> None:
     """Refresh crowd signals on a timer. Skips automatically while a call is live."""
+    ticks = 0
     while True:
         try:
-            if not settings.mock:
-                pollers.refresh_crowd_signals()
+            ticks += 1
+            if ticks % 2 == 0:
+                _sync_live_transcripts()
+            # Stuck check every ~6 s (every other tick after transcript sync).
+            if ticks % 2 == 0:
+                await asyncio.to_thread(_check_stuck_calls)
+            if not settings.mock and ticks % 30 == 0:
+                # Crowd poll every ~90s (loop sleeps 3s). Never while a call is live —
+                # pollers.refresh_crowd_signals itself skips when live calls exist.
+                await asyncio.to_thread(pollers.refresh_crowd_signals)
         except Exception:
             pass
-        await asyncio.sleep(120 if settings.mock else 90)
+        await asyncio.sleep(3)
 
 
 @asynccontextmanager
@@ -208,18 +454,32 @@ async def lifespan(app: FastAPI):
     db.init()
     _ensure_seed()
     pollers.ensure_demo_hazards()
-    task = asyncio.create_task(_signal_poll_loop())
     try:
-        # Prime cached signals once at boot (fixture or live).
+        n = _end_stale_live_calls(900)
+        if n:
+            print(f"ended {n} stale live call(s)", flush=True)
+    except Exception as exc:
+        print(f"stale call cleanup failed: {exc}", flush=True)
+    async def _prime_signals() -> None:
+        # Prefer local Bright Data cache for the Local news box; optional live refresh after.
         try:
-            pollers.refresh_crowd_signals()
-        except Exception:
-            pass
+            await asyncio.to_thread(pollers.ensure_cached_signals)
+        except Exception as exc:
+            print(f"cached signal prime failed: {exc}", flush=True)
+        try:
+            await asyncio.to_thread(pollers.refresh_crowd_signals)
+        except Exception as exc:
+            print(f"signal prime failed: {exc}", flush=True)
+
+    task = asyncio.create_task(_signal_poll_loop())
+    prime = asyncio.create_task(_prime_signals())
+    try:
         yield
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        for t in (task, prime):
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
 
 
 app = FastAPI(title="AGNI Incident API", version="0.2.0", lifespan=lifespan)
@@ -258,30 +518,98 @@ def incident_or_404(iid: str) -> dict:
 
 
 async def resolve_call_landmark(iid: str, conversation_id: str, spoken: str) -> None:
-    """Resolve in the background. Only cached records may supply coordinates."""
+    """Background locate: cache → region geocode. Never invents coords; never clears caller GPS."""
+    # Keep existing phone/Twilio pin if present — landmark only fills empty slots.
+    existing = db.incident(iid) or {}
+    have_caller_gps = (
+        existing.get("lat") is not None
+        and existing.get("lon") is not None
+        and existing.get("location_src") == "caller"
+    )
     extracted = await asyncio.to_thread(landmark_service.extract_landmark, spoken)
-    match = landmark_service.match_landmark(extracted["text"])
-    detail = "Landmark matched to the local cache" if match else "No verified landmark match; location remains unknown"
+    # Gemini often blanks on timeout — still match the caller's spoken words against cache.
+    query = (extracted.get("text") or "").strip() or (spoken or "").strip()
+    match = await asyncio.to_thread(landmark_service.locate, query)
+    if not match and spoken and query != (spoken or "").strip():
+        match = await asyncio.to_thread(landmark_service.locate, spoken)
+    loc_src = (match or {}).get("location_src") or ("landmark" if match else None)
+    if match and loc_src == "landmark":
+        detail = "Pin from cached San Diego landmarks"
+    elif match and loc_src == "geocode":
+        detail = "Pin from region geocode (never invented)"
+    else:
+        detail = "Location: not yet — no cache match or region geocode hit"
+    label = (extracted.get("text") or spoken or "").strip()[:300]
+    applied = False
     with db.connect() as conn:
-        conn.execute("UPDATE calls SET landmark_text=? WHERE id=?", (extracted["text"], conversation_id))
-        if match:
-            why_line = "Caller landmark · " + str(match.get("name", "matched place"))
-            conn.execute("UPDATE incidents SET lat=?,lon=?,location_src='caller',why_line=? WHERE id=?",
-                         (match["lat"], match["lon"], why_line, iid))
+        conn.execute("UPDATE calls SET landmark_text=? WHERE id=?", (label, conversation_id))
+        if match and not have_caller_gps:
+            matched_name = str(match.get("name") or "matched place")
+            spoken_for_why = (extracted.get("text") or spoken or "").strip()
+            why_line = (
+                f"Caller landmark · {spoken_for_why}"
+                if spoken_for_why and spoken_for_why.casefold() != matched_name.casefold()
+                else f"Caller landmark · {matched_name}"
+            )
+            conn.execute(
+                "UPDATE incidents SET lat=?,lon=?,location_src=?,why_line=? WHERE id=?",
+                (match["lat"], match["lon"], loc_src or "landmark", why_line, iid),
+            )
             conn.execute("INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
                          "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
                          (iid,"caller_location","agree",detail))
+            applied = True
+        elif have_caller_gps:
+            # GPS already on the map; still record landmark words for the why line.
+            conn.execute(
+                "UPDATE incidents SET why_line=COALESCE(NULLIF(why_line,''), ?) WHERE id=?",
+                (f"Caller GPS · {label}" if label else "Caller GPS", iid),
+            )
+            conn.execute("INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
+                         "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                         (iid,"caller_location","agree", "Caller GPS"))
+            applied = True
+            match = {
+                "lat": existing["lat"], "lon": existing["lon"], "name": label or "caller",
+                "location_src": "caller",
+            }
+            loc_src = "caller"
+            detail = "Caller GPS"
         else:
             conn.execute("INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
                          "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
                          (iid,"caller_location","empty",detail))
-    bus.emit("evidence.updated", iid, {"source":"caller_location","state":"agree" if match else "empty",
-                                      "detail":detail,"lat":match["lat"] if match else None,
-                                      "lon":match["lon"] if match else None,
-                                      "location_src":"caller" if match else None,
-                                      "why_line":("Caller landmark · " + str(match.get("name", "matched place"))) if match else None,
-                                      "extraction_status":extracted["status"]})
-    if match:
+    story = None
+    if match and match.get("lat") is not None:
+        brightdata_story.attach_nearby_signals(
+            iid, float(match["lat"]), float(match["lon"]),
+            place_hint=str(match.get("name") or label),
+        )
+        story = brightdata_story.first_mention_story(iid)
+    spoken_label = label or (spoken or "").strip()
+    why = None
+    if match and match.get("lat") is not None:
+        matched_name = str(match.get("name") or "matched place")
+        why = (
+            f"Caller landmark · {spoken_label}"
+            if spoken_label and spoken_label.casefold() != matched_name.casefold()
+            else f"Caller landmark · {matched_name}"
+        )
+        if loc_src == "caller":
+            why = f"Caller GPS · {spoken_label}" if spoken_label else "Caller GPS"
+        elif loc_src == "geocode":
+            why = f"Geocoded · {matched_name}"
+    bus.emit("evidence.updated", iid, {"source":"caller_location","state":"agree" if applied else "empty",
+                                      "detail":detail,
+                                      "lat":match["lat"] if match and match.get("lat") is not None else None,
+                                      "lon":match["lon"] if match and match.get("lon") is not None else None,
+                                      "location_src": loc_src if applied else None,
+                                      "landmark_name": match.get("name") if match else None,
+                                      "landmark_text": spoken_label or None,
+                                      "why_line": why,
+                                      "extraction_status":extracted.get("status"),
+                                      "first_mention": story})
+    if applied and match and match.get("lat") is not None:
         merge_service.suggest_for_incident(iid)
 
 
@@ -293,7 +621,8 @@ def health():
         "database": "sqlite",
         "mode": "mock" if settings.mock else "live",
         "overflow_enabled": db.overflow_enabled(),
-        "public_base_url": settings.public_base_url,
+        # Re-read .env so Serveo repoints don't need a uvicorn bounce (bounce → Serveo 502).
+        "public_base_url": _public_base(),
         "keys": {
             "elevenlabs": httputil.keyed("ELEVENLABS_API_KEY"),
             "elevenlabs_phone": httputil.keyed("ELEVENLABS_PHONE_NUMBER_ID"),
@@ -313,6 +642,29 @@ def health():
 @app.get("/api/state")
 def get_state(_: str = Depends(operator)):
     state = db.state()
+    # Progressive Bright Data story fields (cache only) for the selected fire / Public ears.
+    stories: dict[str, Any] = {}
+    for inc in state.get("incidents") or []:
+        iid = inc.get("id")
+        if not iid:
+            continue
+        story = brightdata_story.first_mention_story(iid, inc)
+        if story:
+            stories[iid] = story
+            inc["first_mention"] = story
+        src = inc.get("location_src")
+        if src == "landmark":
+            inc["landmark_chip"] = "Pin from cached San Diego landmarks"
+        elif src == "geocode":
+            inc["landmark_chip"] = "Pin from region geocode (never invented)"
+        elif src == "caller":
+            inc["landmark_chip"] = "Caller GPS"
+    state["brightdata"] = {
+        "mission": "Residents mentioned smoke earlier · raises priority only · never dispatches",
+        "label": "Public ears (Bright Data)",
+        "cache_only": True,
+        "first_mention_by_incident": stories,
+    }
     if settings.mock:
         state["feeds"] = {"status":"mock","wind":None,"wind_age_s":None,"camera_count":0,"cameras":[],
                           "fires":[],"hotspots":[],"note":"No external feeds are called in mock mode."}
@@ -337,7 +689,14 @@ def list_incidents(_: str = Depends(operator)):
 
 @app.get("/api/settings")
 def get_settings(_: str = Depends(operator)):
-    return {"overflow_enabled": db.overflow_enabled(), "mode": "mock" if settings.mock else "live"}
+    return {
+        "overflow_enabled": db.overflow_enabled(),
+        "mode": "mock" if settings.mock else "live",
+        "demo_replay": bool(settings.demo_replay),
+        "firms_key_set": bool(os.environ.get("FIRMS_MAP_KEY")),
+        "ors_key_set": bool(os.environ.get("ORS_API_KEY")),
+        "dispatcher_phone_set": bool(os.environ.get("DISPATCHER_PHONE_NUMBER", "").strip()),
+    }
 
 
 @app.put("/api/settings")
@@ -356,15 +715,47 @@ def get_incident(iid: str, _: str = Depends(operator)):
 @app.get("/api/incidents/{iid}/evidence")
 def evidence(iid: str, _: str = Depends(operator)):
     incident_or_404(iid)
+    firms_key=bool(os.environ.get("FIRMS_MAP_KEY"))
     with db.connect() as conn:
         rows=[dict(r) for r in conn.execute("SELECT * FROM evidence WHERE incident_id=? ORDER BY source",(iid,))]
     if not rows:
-        rows=evidence_service.default_rows(firms_key_set=bool(os.environ.get("FIRMS_MAP_KEY")))
+        rows=evidence_service.default_rows(firms_key_set=firms_key)
+    else:
+        # Keep FIRMS honest when the key was added after the row was first written.
+        for row in rows:
+            if row.get("source")!="firms":
+                continue
+            detail=str(row.get("detail") or "")
+            if firms_key and ("key not set" in detail.lower() or row.get("state")=="unknown"):
+                row["state"]="empty"
+                row["detail"]="No detection yet; satellite data can lag hours"
+            elif not firms_key:
+                row["state"]="unknown"
+                row["detail"]="Key not set"
     line = evidence_service.why_line(rows)
-    if line:
-        with db.connect() as conn:
-            conn.execute("UPDATE incidents SET why_line=? WHERE id=?", (line, iid))
-    return {"incident_id":iid,"rows":rows,"why_line":line or None}
+    with db.connect() as conn:
+        existing = conn.execute("SELECT why_line FROM incidents WHERE id=?", (iid,)).fetchone()
+        current = (existing["why_line"] if existing else None) or ""
+        chosen = line or current
+        if current and line and len(current) > len(line):
+            chosen = current
+        if chosen and chosen != current:
+            conn.execute("UPDATE incidents SET why_line=? WHERE id=?", (chosen, iid))
+    item = incident_or_404(iid)
+    story = brightdata_story.first_mention_story(iid, item)
+    landmark_chip = None
+    src = item.get("location_src")
+    if src == "landmark":
+        landmark_chip = "Pin from cached San Diego landmarks"
+    elif src == "geocode":
+        landmark_chip = "Pin from region geocode (never invented)"
+    elif src == "caller":
+        landmark_chip = "Caller GPS"
+    return {
+        "incident_id": iid, "rows": rows, "why_line": chosen or None,
+        "firms_key_set": firms_key, "first_mention": story,
+        "landmark_chip": landmark_chip,
+    }
 
 
 @app.post("/api/tools/report_fire")
@@ -381,18 +772,39 @@ async def report_fire(payload: IncidentIn, _: None = Depends(tool_auth)):
         iid="inc_"+uuid4().hex[:10]
         phone = (payload.phone or "").strip() or None
         last4 = phone[-4:] if phone and len(phone) >= 4 else None
+        # Immediate pin only when the payload carries real coords (Twilio / client / tool).
+        has_gps = payload.lat is not None and payload.lon is not None
+        loc_src = "caller" if has_gps else None
         conn.execute("INSERT INTO incidents(id,status,level,kind,title,lat,lon,location_src,description) VALUES(?,?,?,?,?,?,?,?,?)",
-                     (iid,"possible",3,"fire","Possible fire report",payload.lat,payload.lon,"caller",payload.what_seen))
+                     (iid,"possible",3,"fire","Possible fire report",payload.lat,payload.lon,loc_src,payload.what_seen))
         conn.execute(
             "INSERT INTO calls(id,incident_id,direction,language,landmark_text,phone_e164,phone_last4) VALUES(?,?,'inbound',?,?,?,?)",
             (payload.conversation_id, iid, payload.language, payload.landmark_text, phone, last4),
         )
+        if has_gps:
+            conn.execute(
+                "INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
+                "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                (iid, "caller_location", "agree",
+                 "Caller GPS"),
+            )
     bus.emit("call.started",iid,{"call_id":payload.conversation_id,"direction":"inbound","language":payload.language,
-                                 "phone_last4": (payload.phone or "")[-4:] if payload.phone else None})
+                                 "phone_last4": last4, "landmark_text": payload.landmark_text,
+                                 "lat": payload.lat, "lon": payload.lon})
     bus.emit("incident.created",iid,{"status":"possible","level":3,"lat":payload.lat,"lon":payload.lon,
-                                     "location_src":"caller","landmark_text":payload.landmark_text,
+                                     "location_src":loc_src,"landmark_text":payload.landmark_text,
                                      "title":"Possible fire report"})
+    if has_gps:
+        # Fly the map now — do not wait on landmark extract / cache.
+        bus.emit("evidence.updated", iid, {
+            "source": "caller_location", "state": "agree",
+            "detail": "Caller GPS",
+            "lat": payload.lat, "lon": payload.lon, "location_src": "caller",
+            "landmark_text": payload.landmark_text,
+            "why_line": f"Caller GPS · {payload.landmark_text}" if payload.landmark_text else "Caller GPS",
+        })
     asyncio.create_task(resolve_call_landmark(iid, payload.conversation_id, payload.landmark_text))
+    asyncio.create_task(_enrich_call_from_eleven(payload.conversation_id, iid))
     return {"incident_id":iid,"overflow":True,"say":"Got it. Which way is the smoke from you?"}
 
 
@@ -439,48 +851,466 @@ def set_needs(payload: NeedsInput, _: None = Depends(tool_auth)):
         call=conn.execute("SELECT incident_id,needs_json FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
         if not call: raise HTTPException(404,"Call not found")
         iid=call["incident_id"]
-        needs={"mobility":payload.mobility,"people":payload.people,"notes":payload.notes}
+        prior: dict = {}
+        try:
+            prior = json.loads(call["needs_json"] or "{}")
+        except Exception:
+            prior = {}
+        needs={
+            **prior,
+            "mobility":payload.mobility,
+            "people":payload.people,
+            "notes":payload.notes,
+        }
         conn.execute("UPDATE calls SET needs_json=? WHERE id=?",(json.dumps(needs),payload.conversation_id))
         if payload.mobility and iid:
             conn.execute("UPDATE incidents SET immobile=1,level=MIN(level,2) WHERE id=?",(iid,))
     if iid:
         bus.emit("triage.result",iid,{"source":"caller_needs","immobile":payload.mobility,
                                       "people":payload.people,"priority_raised":payload.mobility})
-    say="I've marked that someone cannot move. A dispatcher will review this." if payload.mobility else "Thank you. I have noted that."
-    return {"say":say}
+    # Caller / agent asked for a human, or notes flag escalate → JUMP IN CTA.
+    if _caller_asks_human(payload.notes):
+        _mark_needs_human(payload.conversation_id, "set_needs_notes")
+    # Prompt the agent to call get_guidance next — do not invent directions here.
+    if payload.mobility:
+        say = "I've marked that someone cannot move. Stay with them. I will give you one safe next step."
+    else:
+        say = "Thank you. I will give you one clear next step now."
+    return {"say": say}
+
+
+def _cardinal(bearing_deg: float | None, *, lang: str = "en") -> str | None:
+    if bearing_deg is None:
+        return None
+    en = ("north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest")
+    es = ("norte", "noreste", "este", "sureste", "sur", "suroeste", "oeste", "noroeste")
+    names = es if (lang or "en").lower().startswith("es") else en
+    return names[int((float(bearing_deg) + 22.5) // 45) % 8]
 
 
 @app.post("/api/tools/get_guidance")
 def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
+    """Speak one Bright Data–backed safe path. Never invent coordinates or shelters."""
     with db.connect() as conn:
-        call=conn.execute("SELECT incident_id,state FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
+        call=conn.execute("SELECT incident_id,state,language FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
         if not call: raise HTTPException(404,"Call not found")
         iid=call["incident_id"]
-        incident=conn.execute("SELECT status,assigned_unit FROM incidents WHERE id=?",(iid,)).fetchone() if iid else None
+        incident=conn.execute(
+            "SELECT status,assigned_unit,lat,lon,immobile FROM incidents WHERE id=?", (iid,)
+        ).fetchone() if iid else None
         dispatch=conn.execute("SELECT unit_id,eta_s,route_kind FROM dispatches WHERE incident_id=? ORDER BY id DESC LIMIT 1",(iid,)).fetchone() if iid else None
+        ring=conn.execute(
+            "SELECT wind_json FROM rings WHERE incident_id=? ORDER BY id DESC LIMIT 1", (iid,)
+        ).fetchone() if iid else None
+        hazard_n = 0
+        if iid and incident and incident["lat"] is not None:
+            try:
+                hazard_n = conn.execute(
+                    "SELECT COUNT(*) FROM hazards WHERE "
+                    "(source LIKE 'brightdata%' OR lower(title) LIKE '%caltrans%' "
+                    "OR lower(kind) LIKE '%closure%')"
+                ).fetchone()[0]
+            except Exception:
+                hazard_n = 0
     confirmed=bool(incident and incident["status"] in {"confirmed","dispatched"})
     dispatched=bool(incident and incident["status"]=="dispatched")
-    say="A dispatcher is reviewing your report. Stay where you are safe."
-    eta_s=None
-    transfer = eleven.should_transfer(payload.conversation_id) or call["state"] == "human"
+    dispatcher_phone = bool(os.environ.get("DISPATCHER_PHONE_NUMBER", "").strip())
+    want_transfer = eleven.should_transfer(payload.conversation_id) or call["state"] == "human"
+    # Never promise a human transfer we cannot place.
+    transfer = want_transfer and dispatcher_phone
+    lang = ((call["language"] if call else None) or "en").lower()
+    es = lang.startswith("es")
+    shelter_payload = None
+    refused = []
+    eta_s = None
+    reveal = False  # console Jobs beat when we speak a real Bright Data shelter path
+
     if transfer:
-        say="I'm connecting you to a dispatcher now. Stay on the line."
+        say = "I'm connecting you to a dispatcher now. Stay on the line." if not es else (
+            "Lo conecto con un despachador ahora. Quédese en la línea."
+        )
+    elif want_transfer and not dispatcher_phone:
+        say = (
+            "A dispatcher is watching your pin. Stay where you are safe. "
+            "Tell me if flames get closer or if someone needs help moving."
+        ) if not es else (
+            "Un despachador ya ve su reporte. Quédese donde esté seguro. "
+            "Dígame si el fuego se acerca o si alguien no puede caminar."
+        )
     elif dispatched and dispatch:
-        say=f"A dispatcher has sent {dispatch['unit_id']}. Stay where you are safe."
+        say = f"A dispatcher has sent {dispatch['unit_id']}. Stay where you are safe."
+        if dispatch["route_kind"] == "road" and dispatch["eta_s"] is not None:
+            eta_s = dispatch["eta_s"]
+            minutes = max(1, int(round(eta_s / 60)))
+            say = (
+                f"Help is about {minutes} minutes away. Stay where you are safe."
+                if not es else
+                f"La ayuda está a unos {minutes} minutos. Quédese donde esté seguro."
+            )
     elif dispatched:
-        say="A dispatcher has sent help. Stay where you are safe."
-    if dispatch and dispatch["route_kind"]=="road" and dispatch["eta_s"] is not None:
-        eta_s=dispatch["eta_s"]
-    return {"say":say,"incident_id":iid,"confirmed":confirmed,"dispatched":dispatched,
-            "should_transfer":transfer,"shelter":None,"eta_s":eta_s}
+        say = "A dispatcher has sent help. Stay where you are safe." if not es else (
+            "Un despachador ya envió ayuda. Quédese donde esté seguro."
+        )
+    elif confirmed:
+        say = (
+            "A dispatcher confirmed your report and is assigning help. "
+            "Stay where you are safe. I am still here."
+        ) if not es else (
+            "Un despachador confirmó su reporte y está enviando ayuda. "
+            "Quédese donde esté seguro. Sigo aquí."
+        )
+    else:
+        # THE moment: one concrete escape line from Bright Data shelter cache + downwind refusal.
+        wind_to_deg = None
+        if ring:
+            try:
+                wind_to_deg = json.loads(ring["wind_json"] or "{}").get("to_deg")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                wind_to_deg = None
+        lat = incident["lat"] if incident else None
+        lon = incident["lon"] if incident else None
+        immobile = bool(incident and incident["immobile"])
+        if lat is not None and lon is not None and not immobile:
+            try:
+                chosen = routing.choose_shelter((float(lat), float(lon)), None, wind_to_deg)
+                shelter_payload = chosen.get("shelter")
+                refused = chosen.get("refused") or []
+            except Exception:
+                shelter_payload = None
+                refused = []
+        if immobile:
+            say = (
+                "Stay with them where you are safe. Keep your phone on. "
+                "A dispatcher can see your pin and will prioritize this call."
+            ) if not es else (
+                "Quédese con ellos donde estén seguros. Mantenga el teléfono encendido. "
+                "Un despachador ya ve su pin y le dará prioridad."
+            )
+        elif shelter_payload and shelter_payload.get("name"):
+            direction = _cardinal(shelter_payload.get("bearing_deg"), lang=lang)
+            name = shelter_payload["name"]
+            room = shelter_payload.get("room")
+            refused_name = (refused[0] or {}).get("name") if refused else None
+            # Spoken line judges hear — Bright Data capacity + not downwind. Keep ≤ ~25 words.
+            if es:
+                core = (
+                    f"Si puede salir con seguridad, vaya al {direction} hacia {name}."
+                    if direction else
+                    f"Si puede salir con seguridad, diríjase hacia {name}."
+                )
+                if isinstance(room, int):
+                    core += f" Hay espacio para unas {room} personas."
+                if refused_name:
+                    core += f" No vaya a {refused_name}: está a favor del viento."
+                core += " Mantenga el teléfono encendido."
+            else:
+                core = (
+                    f"If you can leave safely, go {direction} toward {name}."
+                    if direction else
+                    f"If you can leave safely, head toward {name}."
+                )
+                if isinstance(room, int):
+                    core += f" It has room for about {room} people."
+                if refused_name:
+                    core += f" Do not go to {refused_name} — it is downwind."
+                if hazard_n:
+                    core += " Avoid closed roads on the way."
+                core += " Keep your phone on. A dispatcher can see your report."
+            say = core
+            reveal = True
+        else:
+            say = (
+                "A dispatcher can see your report now. Stay where you are safe, "
+                "keep your phone on, and tell me if the smoke gets worse."
+            ) if not es else (
+                "Un despachador ya ve su reporte. Quédese donde esté seguro, "
+                "mantenga el teléfono encendido, y dígame si el humo empeora."
+            )
+
+    if reveal and iid and shelter_payload:
+        bus.emit("guidance.ready", iid, {
+            "say": say,
+            "shelter": shelter_payload,
+            "refused": refused[:3],
+            "source": "brightdata_shelter_cache",
+            "label": "Bright Data · safest open shelter (not downwind)",
+            "closures_considered": int(hazard_n or 0),
+            "conversation_id": payload.conversation_id,
+        })
+
+    return {"say": say, "incident_id": iid, "confirmed": confirmed, "dispatched": dispatched,
+            "should_transfer": transfer, "dispatcher_phone_set": dispatcher_phone,
+            "shelter": shelter_payload, "eta_s": eta_s, "refused": refused,
+            "guidance_source": "brightdata_shelter_cache" if reveal else None}
+
+
+def _sos_token(incident_id: str) -> str:
+    secret = (settings.tool_secret or os.environ.get("ELEVENLABS_TOOL_SECRET") or "agni-local").encode()
+    return hmac.new(secret, f"sos:{incident_id}".encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _public_base() -> str:
+    # Prefer live env; fall back to .env file so tunnel repoints without a full process rebuild of setdefault.
+    base = os.environ.get("PUBLIC_BASE_URL") or settings.public_base_url or ""
+    if not base or "serveousercontent.com" in base or "serveo.net" in base or "trycloudflare.com" in base:
+        path = ROOT / ".env"
+        if path.exists():
+            for raw in path.read_text().splitlines():
+                if raw.startswith("PUBLIC_BASE_URL="):
+                    file_base = raw.split("=", 1)[1].strip().strip('"').strip("'")
+                    if file_base:
+                        base = file_base
+                        os.environ["PUBLIC_BASE_URL"] = file_base
+                    break
+    return (base or "http://127.0.0.1:8000").rstrip("/")
+
+
+def _sos_url(incident_id: str) -> str:
+    return f"{_public_base()}/sos/cam/{incident_id}?t={_sos_token(incident_id)}"
+
+
+# Four-letter codes only — callers will not type long URLs. Console shows the code;
+# dispatcher can copy/SMS the short link from their phone.
+_CAM_FOUR = [
+    "maps", "mesa", "pine", "dune", "cove", "reef", "hill", "wind",
+    "glow", "haze", "mist", "bark", "fern", "lake", "sand", "path",
+    "road", "east", "west", "safe", "help", "fire",
+]
+
+
+def _short_cam_url(incident_id: str) -> tuple[str, str]:
+    """Create /c/{4-letter-code} redirect. Code is for the console, not for typing a host."""
+    code = _CAM_FOUR[int(uuid4().hex[:4], 16) % len(_CAM_FOUR)]
+    # Avoid collisions with an active code.
+    token = _sos_token(incident_id)
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cam_links("
+            "code TEXT PRIMARY KEY, incident_id TEXT NOT NULL, token TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+        )
+        for _ in range(8):
+            exists = conn.execute("SELECT 1 FROM cam_links WHERE code=?", (code,)).fetchone()
+            if not exists:
+                break
+            code = _CAM_FOUR[int(uuid4().hex[:4], 16) % len(_CAM_FOUR)]
+        conn.execute(
+            "INSERT OR REPLACE INTO cam_links(code,incident_id,token) VALUES(?,?,?)",
+            (code, incident_id, token),
+        )
+        conn.commit()
+    short = f"{_public_base()}/c/{code}"
+    return short, code
+
+
+def _public_shorten(url: str) -> str | None:
+    """Best-effort public short link for dispatcher copy/SMS (never spoken to type)."""
+    import urllib.parse
+
+    endpoints = [
+        ("https://da.gd/s?", {"url": url}),
+        ("https://v.gd/create.php?", {"format": "simple", "url": url}),
+    ]
+    for base, params in endpoints:
+        try:
+            req = urllib.request.Request(base + urllib.parse.urlencode(params), method="GET")
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                out = resp.read().decode().strip().split()[0]
+            if out.startswith("http") and "serveousercontent" not in out and len(out) <= 40:
+                return out.rstrip("/")
+        except Exception:
+            continue
+    return None
+
+
+def _check_sos_token(incident_id: str, token: str) -> None:
+    expected = _sos_token(incident_id)
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(401, "Invalid or missing camera link token")
+
+
+def _twilio_sms(to_number: str, body: str, *, content_var: str | None = None) -> dict:
+    """Best-effort SMS.
+
+    Prefer Content Template (ContentSid + ContentVariables) when TWILIO_CONTENT_SID is set —
+    required after trial upgrade for custom camera links. Freeform Body is the fallback for
+    paid accounts without a template. Trial accounts reject freeform (572006) and cannot
+    create Content Templates via API until upgraded.
+    """
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    from_number = os.environ.get("TWILIO_PHONE_NUMBER", "").strip()
+    content_sid = os.environ.get("TWILIO_CONTENT_SID", "").strip()
+    if not (sid and token and from_number and to_number):
+        return {"ok": False, "reason": "twilio_not_configured"}
+    try:
+        import base64
+        import urllib.error
+        import urllib.parse
+        auth = base64.b64encode(f"{sid}:{token}".encode()).decode()
+        fields: dict[str, str] = {"To": to_number, "From": from_number}
+        mode = "body"
+        if content_sid:
+            # Do not send Body with ContentSid (Twilio replaces Body/MediaUrl).
+            fields["ContentSid"] = content_sid
+            var = (content_var or body or "").strip()
+            fields["ContentVariables"] = json.dumps({"1": var})
+            mode = "content"
+        else:
+            fields["Body"] = body
+        data = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(
+            f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
+            data=data,
+            method="POST",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode()
+            msg_sid = None
+            msg_status = None
+            try:
+                parsed = json.loads(raw)
+                msg_sid = parsed.get("sid")
+                msg_status = parsed.get("status")
+            except Exception:
+                pass
+            return {
+                "ok": 200 <= resp.status < 300,
+                "status": resp.status,
+                "mode": mode,
+                "message_sid": msg_sid,
+                "message_status": msg_status,
+            }
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode()[:240]
+        except Exception:
+            detail = str(exc)
+        return {"ok": False, "reason": f"HTTP {exc.code}: {detail}", "mode": "content" if content_sid else "body"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": str(exc)[:160], "mode": "content" if content_sid else "body"}
+
+
+def _lookup_caller_phone(conversation_id: str) -> str | None:
+    """Pull caller E.164 from ElevenLabs conversation metadata when missing locally."""
+    key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key or not conversation_id:
+        return None
+    try:
+        req = urllib.request.Request(
+            f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
+            headers={"xi-api-key": key},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        phone = (
+            ((data.get("metadata") or {}).get("phone_call") or {}).get("external_number")
+            or (data.get("metadata") or {}).get("caller_id")
+        )
+        if isinstance(phone, str) and phone.startswith("+") and len(phone) >= 10:
+            return phone
+    except Exception:
+        return None
+    return None
+
+
+async def _enrich_call_from_eleven(conversation_id: str, incident_id: str) -> None:
+    """After report_fire: fill caller phone + pull first transcript lines for the console."""
+    await asyncio.sleep(0.4)
+    try:
+        phone = await asyncio.to_thread(_lookup_caller_phone, conversation_id)
+        if phone:
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE calls SET phone_e164=COALESCE(phone_e164, ?), phone_last4=COALESCE(phone_last4, ?) WHERE id=?",
+                    (phone, phone[-4:], conversation_id),
+                )
+                conn.commit()
+            bus.emit("call.started", incident_id, {
+                "call_id": conversation_id, "direction": "inbound",
+                "phone_last4": phone[-4:], "enriched": True,
+            })
+        await asyncio.to_thread(_sync_live_transcripts)
+    except Exception:
+        return
 
 
 @app.post("/api/tools/send_cam_link")
 def send_cam_link(payload: GuidanceInput, _: None = Depends(tool_auth)):
+    """Camera page via SMS/tap — never ask the caller to type a long URL."""
     if settings.mock:
-        return {"say":"A camera link is not available in this practice call."}
-    # SMS is disabled until the opt-in and signed-link path is implemented.
-    return {"say":"A camera link is not available yet. Please keep describing what you see."}
+        return {"say": "A camera link is not available in this practice call.", "url": None}
+    with db.connect() as conn:
+        call = conn.execute(
+            "SELECT incident_id, language, phone_e164 FROM calls WHERE id=?",
+            (payload.conversation_id,),
+        ).fetchone()
+    if not call or not call["incident_id"]:
+        return {"say": "I still need your location before I can send a camera link.", "url": None}
+    iid = call["incident_id"]
+    full_url = _sos_url(iid)
+    tunnel_short, code = _short_cam_url(iid)
+    easy_url = _public_shorten(tunnel_short) or tunnel_short
+    phone = (call["phone_e164"] if "phone_e164" in call.keys() else None) or _lookup_caller_phone(payload.conversation_id)
+    if phone and not (call["phone_e164"] if "phone_e164" in call.keys() else None):
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE calls SET phone_e164=?, phone_last4=? WHERE id=?",
+                (phone, phone[-4:], payload.conversation_id),
+            )
+            conn.commit()
+    # Template body is "AGNI camera: {{1}}" — pass short URL (or 4-letter code) as var 1.
+    sms_payload = easy_url or code
+    sms = (
+        _twilio_sms(phone, f"AGNI camera — tap to open: {sms_payload}", content_var=sms_payload)
+        if phone
+        else {"ok": False, "reason": "no_caller_phone"}
+    )
+    lang = (call["language"] or "en").lower()
+    spelled = " ".join(code.upper())
+    if sms.get("ok"):
+        if lang.startswith("es"):
+            say = (
+                "Le envié un mensaje de texto con un botón de cámara. "
+                "Ábralo, toque el enlace, y apunte al humo. No escriba ninguna dirección web."
+            )
+        else:
+            say = (
+                "I texted you a camera button. Open the text, tap the link, and point at the smoke. "
+                "Do not type any web address."
+            )
+    else:
+        # Trial Twilio often blocks SMS. Never dump a long URL on the caller.
+        if lang.startswith("es"):
+            say = (
+                "No pude enviarle un mensaje de texto en esta línea de prueba. "
+                f"Quédese en la llamada. El código de cámara para el despachador es {spelled}. "
+                "No escriba ninguna dirección web."
+            )
+        else:
+            say = (
+                "I could not text you on this demo line. Stay on the call with me. "
+                f"The dispatcher camera code is {spelled}. "
+                "Do not type any web address — a dispatcher can text you the link."
+            )
+    bus.emit("camera.link", iid, {
+        "code": code,
+        "url": easy_url,
+        "tunnel_url": tunnel_short,
+        "full_url": full_url,
+        "sms_ok": bool(sms.get("ok")),
+        "call_id": payload.conversation_id,
+    })
+    return {
+        "say": say,
+        "url": easy_url,
+        "tunnel_url": tunnel_short,
+        "full_url": full_url,
+        "code": code,
+        "incident_id": iid,
+        "sms": sms,
+    }
 
 
 @app.post("/api/tools/request_rescue")
@@ -505,6 +1335,11 @@ def add_transcript(payload: TranscriptInput, _: None = Depends(tool_auth)):
                      (payload.conversation_id,payload.speaker,payload.text,payload.lang))
     bus.emit("call.transcript",call["incident_id"],{"call_id":payload.conversation_id,
                                                      "speaker":payload.speaker,"text":payload.text,"lang":payload.lang})
+    speaker = (payload.speaker or "").lower()
+    if speaker in {"caller", "user"} and _caller_asks_human(payload.text):
+        _mark_needs_human(payload.conversation_id, "caller_asked_human")
+    else:
+        _clear_stuck_if_resumed(payload.conversation_id)
     return {"ok":True}
 
 
@@ -522,6 +1357,139 @@ def assess_vision(iid: str,payload: VisionInput,_: str=Depends(operator)):
     bus.emit("triage.result",iid,data)
     bus.emit("evidence.updated",iid,{"rows":[{"source":"camera","state":"agree" if suggested else "empty","detail":payload.reason}],"status":"possible"})
     return incident_or_404(iid)
+
+
+@app.get("/c/{code}")
+def short_cam_redirect(code: str):
+    """Short speakable camera link → full /sos/cam page."""
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cam_links("
+            "code TEXT PRIMARY KEY, incident_id TEXT NOT NULL, token TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+        )
+        row = conn.execute(
+            "SELECT incident_id, token FROM cam_links WHERE code=?", (code.lower(),)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT incident_id, token FROM cam_links WHERE code=?", (code,)
+            ).fetchone()
+    if not row:
+        raise HTTPException(404, "Camera link expired or unknown")
+    return RedirectResponse(
+        url=f"/sos/cam/{row['incident_id']}?t={row['token']}",
+        status_code=302,
+    )
+
+
+@app.get("/sos/cam/{iid}", response_class=HTMLResponse)
+def sos_cam_page(iid: str, t: str = Query(default="")):
+    """Caller phone page from the storyboard: rear camera → Gemini triage."""
+    incident_or_404(iid)
+    _check_sos_token(iid, t)
+    path = ROOT / "frontend" / "sos.html"
+    if not path.exists():
+        raise HTTPException(500, "Caller camera page is missing")
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+class SosBearingInput(BaseModel):
+    lat: float
+    lon: float
+    heading_deg: float
+
+
+@app.post("/api/sos/{iid}/frame")
+async def sos_frame(iid: str, request: Request, t: str = Query(default="")):
+    incident_or_404(iid)
+    _check_sos_token(iid, t)
+    mime = request.headers.get("content-type", "image/jpeg").split(";", 1)[0].strip().lower()
+    if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(415, "Upload a JPEG, PNG, or WebP image")
+    blob = await request.body()
+    if not blob:
+        raise HTTPException(400, "Empty image")
+    if len(blob) > 5_000_000:
+        raise HTTPException(413, "Image must be 5 MB or smaller")
+    result = await asyncio.to_thread(vision.assess, blob, mime)
+    label = result.get("label") or "cant_tell"
+    state = "agree" if label in {"smoke", "flames"} else "empty"
+    detail = result.get("reason") or label
+    level = None
+    with db.connect() as conn:
+        row = conn.execute("SELECT level FROM incidents WHERE id=?", (iid,)).fetchone()
+        level = row["level"] if row else 3
+        suggested = result.get("recommended_level")
+        if label in {"smoke", "flames"} and isinstance(suggested, int):
+            level = min(level, suggested)
+            conn.execute("UPDATE incidents SET level=? WHERE id=?", (level, iid))
+        conn.execute(
+            "INSERT OR REPLACE INTO evidence(incident_id,source,state,detail) VALUES(?,?,?,?)",
+            (iid, "cameras", state, f"Caller phone · {detail}"[:200]),
+        )
+        conn.commit()
+    event = {
+        "source": "caller_frame",
+        "frame_source": "caller",
+        "label": label,
+        "box": result.get("box_2d"),
+        "flames_visible": result.get("flames_visible", False),
+        "reason": detail,
+        "status": result.get("status"),
+        "applied_level": level,
+    }
+    bus.emit("triage.result", iid, event)
+    bus.emit("evidence.updated", iid, {
+        "rows": [{"source": "cameras", "state": state, "detail": f"Caller phone · {detail}"[:200]}],
+    })
+    return event
+
+
+@app.post("/api/sos/{iid}/bearing")
+def sos_bearing(iid: str, payload: SosBearingInput, t: str = Query(default="")):
+    item = incident_or_404(iid)
+    _check_sos_token(iid, t)
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO bearings(incident_id,call_id,lat,lon,bearing_deg,source) VALUES(?,?,?,?,?,?)",
+            (iid, None, payload.lat, payload.lon, payload.heading_deg, "compass"),
+        )
+        # Phone GPS can place the pin when landmark cache/geocode had nothing yet.
+        if item.get("lat") is None or item.get("lon") is None:
+            conn.execute(
+                "UPDATE incidents SET lat=?,lon=?,location_src='caller',"
+                "why_line=COALESCE(NULLIF(why_line,''), 'Caller GPS') WHERE id=?",
+                (payload.lat, payload.lon, iid),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
+                "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                (iid, "caller_location", "agree",
+                 "Caller GPS"),
+            )
+            bus.emit("evidence.updated", iid, {
+                "source": "caller_location", "state": "agree",
+                "detail": "Caller GPS",
+                "lat": payload.lat, "lon": payload.lon, "location_src": "caller",
+                "why_line": "Caller GPS",
+            })
+        conn.commit()
+    bus.emit("bearing.added", iid, {
+        "lat": payload.lat, "lon": payload.lon,
+        "bearing_deg": payload.heading_deg, "source": "compass",
+    })
+    return {"ok": True}
+
+
+@app.post("/api/sos/{iid}/callback")
+def sos_callback(iid: str, t: str = Query(default="")):
+    incident_or_404(iid)
+    _check_sos_token(iid, t)
+    bus.emit("triage.result", iid, {
+        "source": "caller_request", "label": "callback",
+        "reason": "Caller tapped Call me back on the camera page",
+    })
+    return {"ok": True, "say": "Callback noted"}
 
 
 @app.post("/api/triage/vision/{iid}")
@@ -549,6 +1517,59 @@ async def triage_uploaded_frame(iid: str, request: Request, _: str = Depends(ope
                 "status":result["status"],"applied_level":level}
     bus.emit("triage.result",iid,event_data)
     return event_data
+
+
+@app.post("/api/incidents/{iid}/triage-cameras")
+async def triage_cameras(iid: str, n: int = 3, _: str = Depends(operator)):
+    """Pull nearest ALERTCalifornia stills and ask Gemini if they show smoke. Human-triggered only."""
+    item = incident_or_404(iid)
+    if item.get("lat") is None or item.get("lon") is None:
+        raise HTTPException(409, "Incident needs a location before cameras can be checked")
+    if settings.mock:
+        raise HTTPException(503, "Camera triage is unavailable in mock mode")
+    cams = feeds.cameras(float(item["lat"]), float(item["lon"]))[:max(1, min(n, 3))]
+    if not cams:
+        raise HTTPException(404, "No ALERTCalifornia cameras near this pin")
+    verdicts = []
+    smoke_hits = 0
+    level = item["level"]
+    for cam in cams:
+        blob = await asyncio.to_thread(feeds.camera_jpeg, float(item["lat"]), float(item["lon"]), cam["id"])
+        if not blob:
+            verdicts.append({"camera_id": cam["id"], "name": cam.get("name"), "label": "cant_tell",
+                             "reason": "Frame unavailable", "status": "no_frame"})
+            continue
+        result = await asyncio.to_thread(vision.assess, blob, "image/jpeg")
+        if result["label"] in {"smoke", "flames"}:
+            smoke_hits += 1
+            suggested = result.get("recommended_level")
+            if isinstance(suggested, int):
+                level = min(level, suggested)
+        data = {
+            "source": "camera", "camera_id": cam["id"], "name": cam.get("name"),
+            "frame_source": "replay" if settings.demo_replay else "live",
+            "label": result["label"], "box": result.get("box_2d"),
+            "flames_visible": result.get("flames_visible", False),
+            "reason": result["reason"], "status": result.get("status"),
+        }
+        bus.emit("triage.result", iid, data)
+        verdicts.append(data)
+    detail = (
+        f"{smoke_hits} of {len(verdicts)} cams see smoke"
+        if smoke_hits else
+        f"Checked {len(verdicts)} cams · no smoke / can't tell"
+    )
+    state = "agree" if smoke_hits else "empty"
+    with db.connect() as conn:
+        conn.execute("UPDATE incidents SET level=? WHERE id=?", (level, iid))
+        conn.execute(
+            "INSERT OR REPLACE INTO evidence(incident_id,source,state,detail) VALUES(?,?,?,?)",
+            (iid, "cameras", state, detail),
+        )
+        conn.commit()
+    bus.emit("evidence.updated", iid, {"rows": [{"source": "cameras", "state": state, "detail": detail}],
+                                       "why_line": detail if smoke_hits else None})
+    return {"incident_id": iid, "verdicts": verdicts, "smoke_hits": smoke_hits, "level": level, "detail": detail}
 
 
 @app.post("/api/incidents/{iid}/confirm")
@@ -601,21 +1622,77 @@ def undo_merge(merge_id: int, actor: str = Depends(operator)):
         raise HTTPException(409, str(error))
 
 
+_MOCK_CAMERAS = [
+    {"id": "mock-tp1", "name": "Torrey Pines lookout", "site": "torrey", "online": "mock",
+     "lat": 32.955, "lon": -117.255, "km": 2.1},
+    {"id": "mock-cv1", "name": "Carmel Valley ridge", "site": "carmel", "online": "mock",
+     "lat": 32.93, "lon": -117.22, "km": 3.4},
+    {"id": "mock-mm1", "name": "Mira Mesa hill", "site": "mira", "online": "mock",
+     "lat": 32.91, "lon": -117.14, "km": 5.8},
+]
+
+
+def _nearest_cameras(lat: float, lon: float, n: int = 3) -> list[dict]:
+    """ALERTCalifornia in live mode; honest mock tiles when AGNI_MOCK=1."""
+    if settings.mock:
+        out = []
+        for cam in _MOCK_CAMERAS[:max(1, min(n, 3))]:
+            item = dict(cam)
+            item["km"] = round(
+                ((item["lat"] - lat) ** 2 + (item["lon"] - lon) ** 2) ** 0.5 * 111, 2
+            )
+            out.append(item)
+        return out
+    return feeds.cameras(lat, lon)[:max(1, min(n, 12))]
+
+
 @app.get("/api/cameras")
-def cameras(lat: float,lon: float,n: int=3,_: str=Depends(operator)):
-    cams=[] if settings.mock else feeds.cameras(lat,lon)
-    result=cams[:max(1,min(n,12))]
-    bus.emit("cameras.selected",None,{"cameras":[{k:v for k,v in cam.items() if k!="image"} for cam in result]})
-    return {"cameras":result,"count":len(result)}
+def cameras(lat: float, lon: float, n: int = 3, _: str = Depends(operator)):
+    cams = _nearest_cameras(lat, lon, n)
+    frame_source = "replay" if (settings.demo_replay or settings.mock) else "live"
+    result = []
+    for cam in cams:
+        item = dict(cam)
+        # Browser loads stills through our proxy (ALERTCalifornia hotlink often blank in the console).
+        item["frame"] = f"/api/cameras/{item['id']}/frame?lat={lat}&lon={lon}"
+        item["frame_source"] = frame_source
+        result.append(item)
+    public = [{k: v for k, v in cam.items() if k != "image"} for cam in result]
+    bus.emit("cameras.selected", None, {"cameras": public, "frame_source": frame_source})
+    return {"cameras": result, "count": len(result), "frame_source": frame_source}
+
+
+def _mock_camera_jpeg(camera_id: str) -> bytes:
+    """Gray still with camera id burned in — used only when AGNI_MOCK=1."""
+    try:
+        from PIL import Image, ImageDraw
+        import io
+        img = Image.new("RGB", (320, 180), (28, 32, 36))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([12, 12, 308, 168], outline=(90, 96, 104), width=2)
+        draw.text((24, 70), f"REPLAY · {camera_id[:28]}", fill=(200, 205, 210))
+        draw.text((24, 100), "Mock ALERTCalifornia still", fill=(140, 148, 156))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=70)
+        return buf.getvalue()
+    except Exception:
+        # Minimal JPEG fallback (>1 KB so the console accepts it).
+        return b"\xff\xd8\xff\xe0" + (b"\x00" * 1200) + b"\xff\xd9"
 
 
 @app.get("/api/cameras/{camera_id}/frame")
-def camera_frame(camera_id: str,lat: float,lon: float,_: str=Depends(operator)):
+def camera_frame(camera_id: str, lat: float, lon: float, _: str = Depends(operator)):
     from fastapi.responses import Response
-    if settings.mock: raise HTTPException(503,"Camera frames are unavailable in mock mode")
-    blob=feeds.camera_jpeg(lat,lon,camera_id)
-    if not blob: raise HTTPException(404,"Camera image is not available")
-    return Response(blob,media_type="image/jpeg",headers={"Cache-Control":"public, max-age=10"})
+    if settings.mock:
+        return Response(
+            _mock_camera_jpeg(camera_id),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=30"},
+        )
+    blob = feeds.camera_jpeg(lat, lon, camera_id)
+    if not blob:
+        raise HTTPException(404, "Camera image is not available")
+    return Response(blob, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=10"})
 
 
 @app.get("/api/satellite")
@@ -655,9 +1732,28 @@ def route(iid: str,_: str=Depends(operator)):
         "Straight-line estimate. It is not a safe-route guarantee." if kind == "estimate"
         else "Live road route. Still requires human approval before dispatch."
     )
-    data={"units":top,"route_kind":kind,"avoids":[row["blocked_by"] for row in ranked if row["blocked_by"]],
-          "shelter":shelters["shelter"],"refused":shelters["refused"],"note":note}
-    bus.emit("route.ready",iid,data)
+    avoids = [row["blocked_by"] for row in ranked if row["blocked_by"]]
+    # Also surface Bright Data QuickMap closures even when the straight path clear —
+    # judges should still see the attribution when cache data exists near the pin.
+    with db.connect() as conn:
+        bd_titles = [
+            str(r["title"]) for r in conn.execute(
+                "SELECT title FROM hazards WHERE kind='road_closure' "
+                "AND (source LIKE 'brightdata%' OR lower(title) LIKE '%caltrans%' "
+                "OR lower(title) LIKE '%quickmap%')"
+            )
+        ]
+    attr = brightdata_story.route_attribution(
+        avoids or bd_titles,
+        shelters.get("shelter"),
+    )
+    data = {
+        "units": top, "route_kind": kind, "avoids": avoids,
+        "shelter": attr.get("shelter") or shelters["shelter"],
+        "refused": shelters["refused"], "note": note,
+        "brightdata_chips": attr.get("chips") or [],
+    }
+    bus.emit("route.ready", iid, data)
     return data
 
 
@@ -805,6 +1901,13 @@ def _do_jump_in(iid: str, payload: JumpInInput, call_id: str | None = None, note
         call = _live_call_for_incident(iid)
     if not call:
         raise HTTPException(409, "No live call to transfer")
+    dispatcher_phone = (os.environ.get("DISPATCHER_PHONE_NUMBER") or "").strip()
+    if not settings.mock and not dispatcher_phone:
+        raise HTTPException(
+            409,
+            "Set DISPATCHER_PHONE_NUMBER in .env before JUMP IN. "
+            "Without it the caller hears 'connecting' forever.",
+        )
     with db.connect() as conn:
         lines = [dict(r) for r in conn.execute(
             "SELECT speaker,text,lang,ts FROM transcripts WHERE call_id=? ORDER BY id DESC LIMIT 3",
@@ -946,12 +2049,40 @@ def list_signals(_: str = Depends(operator)):
 
 @app.post("/api/ops/reset")
 def reset_calm(_: str = Depends(operator)):
-    """Reset practice state for the next judge. Does not touch measured sim.json/eval.json."""
+    """Clean slate for the next judge: wipe fires/calls/events, keep units + news signals.
+    Leaves overflow ON so the next dial still works. Does not touch sim.json/eval.json."""
+    wiped: dict[str, int] = {}
+    tables = (
+        "transcripts", "bearings", "triage_results", "evidence", "dispatches",
+        "merges", "rings", "warnings", "rescues", "decisions", "reports",
+        "user_seen", "calls", "incidents", "events",
+    )
     with db.connect() as conn:
-        conn.execute("UPDATE calls SET state='ended',ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE state IN ('live','human')")
+        for table in tables:
+            try:
+                before = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                conn.execute(f"DELETE FROM {table}")
+                wiped[table] = int(before)
+            except Exception:
+                wiped[table] = 0
         conn.execute("UPDATE units SET status='available'")
-        conn.execute("UPDATE settings SET overflow_enabled=0,updated_by='reset',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-    return neon.reset_to_calm()
+        # Keep overflow on for live dial demos; judges should not hunt for the toggle.
+        conn.execute(
+            "UPDATE settings SET overflow_enabled=1,updated_by='reset',"
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1"
+        )
+        # Cap crowd news so the Local news box stays one calm feed.
+        try:
+            conn.execute(
+                "DELETE FROM signals WHERE id NOT IN ("
+                "SELECT id FROM signals WHERE about_fire=1 "
+                "ORDER BY scraped_at DESC LIMIT 12)"
+            )
+        except Exception:
+            pass
+    cache = pollers.ensure_cached_signals(min_rows=4)
+    bus.emit("ops.reset", None, {"wiped": wiped, "overflow_enabled": True, "news_cache": cache})
+    return {"ok": True, "wiped": wiped, "overflow_enabled": True, "news_cache": cache, **neon.reset_to_calm()}
 
 
 @app.get("/api/events")

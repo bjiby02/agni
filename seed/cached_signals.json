@@ -1,0 +1,74 @@
+[
+  {
+    "id": "cache_reddit_tp1",
+    "source": "reddit",
+    "url": "https://www.reddit.com/r/sandiego/comments/demo_smoke_tp/",
+    "text": "Anyone else see smoke near Torrey Pines? Looks like a brush fire off the canyon.",
+    "about_fire": true,
+    "place_text": "Torrey Pines",
+    "confidence": "medium",
+    "lat": 32.867,
+    "lon": -117.252,
+    "posted_minutes_ago": 22
+  },
+  {
+    "id": "cache_x_delmar",
+    "source": "x",
+    "url": "https://x.com/demo/status/agni_smoke_delmar",
+    "text": "Heavy smoke blowing toward Del Mar from the hills. Air smells like ash.",
+    "about_fire": true,
+    "place_text": "Del Mar",
+    "confidence": "high",
+    "lat": 32.87,
+    "lon": -117.248,
+    "posted_minutes_ago": 18
+  },
+  {
+    "id": "cache_serp_cv",
+    "source": "serp",
+    "url": "https://example.invalid/news/carmel-valley-smoke",
+    "text": "San Diego County: smoke reported near Carmel Valley Road; crews monitoring.",
+    "about_fire": true,
+    "place_text": "Carmel Valley",
+    "confidence": "medium",
+    "lat": 32.93,
+    "lon": -117.22,
+    "posted_minutes_ago": 35
+  },
+  {
+    "id": "cache_reddit_mira",
+    "source": "reddit",
+    "url": "https://www.reddit.com/r/sandiego/comments/demo_mira/",
+    "text": "Smell of smoke in Mira Mesa right now. Seeing a plume to the west.",
+    "about_fire": true,
+    "place_text": "Mira Mesa",
+    "confidence": "low",
+    "lat": 32.91,
+    "lon": -117.14,
+    "posted_minutes_ago": 14
+  },
+  {
+    "id": "cache_serp_alert",
+    "source": "serp",
+    "url": "https://example.invalid/news/alertcalifornia-plume",
+    "text": "ALERTCalifornia cams show a thin plume north of UCSD — unverified public posts circulating.",
+    "about_fire": true,
+    "place_text": "UCSD / Torrey Pines",
+    "confidence": "medium",
+    "lat": 32.88,
+    "lon": -117.24,
+    "posted_minutes_ago": 11
+  },
+  {
+    "id": "cache_x_wind",
+    "source": "x",
+    "url": "https://x.com/demo/status/agni_wind_ne",
+    "text": "NE winds pushing smoke toward the coast. Stay aware if you're downwind.",
+    "about_fire": true,
+    "place_text": "San Diego coast",
+    "confidence": "medium",
+    "lat": 32.85,
+    "lon": -117.26,
+    "posted_minutes_ago": 9
+  }
+]

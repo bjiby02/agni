@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "set_needs",
-  "description": "Flag mobility needs and companion count.",
+  "description": "Call when you learn who needs help.",
   "api_schema": {
     "url": "{{PUBLIC_BASE_URL}}/api/tools/set_needs",
     "method": "POST",
@@ -11,13 +11,25 @@
     },
     "request_body_schema": {
       "type": "object",
+      "required": ["conversation_id"],
       "properties": {
-        "conversation_id": { "type": "string" },
-        "mobility": { "type": "boolean" },
-        "people": { "type": "integer" },
-        "notes": { "type": "string" }
-      },
-      "required": ["conversation_id"]
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "mobility": {
+          "type": "boolean",
+          "description": "Someone can't walk or needs help moving"
+        },
+        "people": {
+          "type": "integer",
+          "description": "Number of people with the caller"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Short notes: kids, pets, oxygen"
+        }
+      }
     }
   }
 }

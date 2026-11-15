@@ -1,7 +1,7 @@
 {
   "type": "webhook",
   "name": "request_rescue",
-  "description": "Caller pressed 1 or said help on a warning call.",
+  "description": "Warning agent only. Call when the caller presses 1 or says help in any language.",
   "api_schema": {
     "url": "{{PUBLIC_BASE_URL}}/api/tools/request_rescue",
     "method": "POST",
@@ -11,12 +11,21 @@
     },
     "request_body_schema": {
       "type": "object",
+      "required": ["conversation_id"],
       "properties": {
-        "conversation_id": { "type": "string" },
-        "digits": { "type": "string" },
-        "said_help": { "type": "boolean" }
-      },
-      "required": ["conversation_id"]
+        "conversation_id": {
+          "type": "string",
+          "dynamic_variable": "system__conversation_id"
+        },
+        "digits": {
+          "type": "string",
+          "description": "Keys pressed, if any"
+        },
+        "said_help": {
+          "type": "boolean",
+          "description": "True if they said help instead of pressing 1"
+        }
+      }
     }
   }
 }
