@@ -1,0 +1,20 @@
+[
+  {
+    "id": "opt_in_dispatcher",
+    "phone": "+1XXXXXXXXXX",
+    "lat": 32.91,
+    "lon": -117.17,
+    "opted_in": true,
+    "language": "en",
+    "label": "dispatcher-or-teammate"
+  },
+  {
+    "id": "opt_in_judge",
+    "phone": "+1XXXXXXXXXX",
+    "lat": 32.908,
+    "lon": -117.168,
+    "opted_in": true,
+    "language": "es",
+    "label": "judge"
+  }
+]

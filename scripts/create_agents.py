@@ -98,7 +98,10 @@ def main() -> int:
     secret = env.get("ELEVENLABS_TOOL_SECRET", "").strip() or "change-me-tool-secret"
     base = env.get("PUBLIC_BASE_URL", "").strip() or "http://127.0.0.1:8000"
     prompt = (AGENT_DIR / "system_prompt.md").read_text(encoding="utf-8")
-    warn_prompt = prompt + "\n\n## Warning-call mode\nYou are placing a targeted wildfire warning. Speak slowly. Give direction and shelter. End with: Press 1 or say help if you need help getting out. On 1 or help, call request_rescue.\n"
+    warn_path = AGENT_DIR / "warning_prompt.md"
+    warn_prompt = warn_path.read_text(encoding="utf-8") if warn_path.exists() else (
+        prompt + "\n\n## Warning-call mode\nSpeak slowly. End with press 1 or say help. Call request_rescue.\n"
+    )
     tools = build_tools(base, secret)
     try:
         intake_id = create_agent(

@@ -1,12 +1,72 @@
 [
   {
-    "id": "mock-vons-carmel-valley",
+    "id": "vons-carmel-valley",
     "name": "Vons Carmel Valley",
-    "aliases": ["Carmel Valley Vons", "Vons at Carmel Valley"],
+    "aliases": ["Carmel Valley Vons", "Vons at Carmel Valley", "behind the Vons", "the Vons"],
     "kind": "store",
     "lat": 32.91,
     "lon": -117.17,
-    "source": "mock fixture - replace through the cached landmark importer",
+    "source": "cached fixture — replace via Bright Data landmark import",
+    "scraped_at": null
+  },
+  {
+    "id": "torrey-pines-gliderport",
+    "name": "Torrey Pines",
+    "aliases": ["Torrey Pines Gliderport", "near Torrey Pines", "Torrey Pines State Reserve"],
+    "kind": "landmark",
+    "lat": 32.8896,
+    "lon": -117.2525,
+    "source": "cached fixture",
+    "scraped_at": null
+  },
+  {
+    "id": "mira-mesa",
+    "name": "Mira Mesa",
+    "aliases": ["Mira Mesa Boulevard", "near Mira Mesa"],
+    "kind": "neighborhood",
+    "lat": 32.918,
+    "lon": -117.145,
+    "source": "cached fixture",
+    "scraped_at": null
+  },
+  {
+    "id": "del-mar",
+    "name": "Del Mar",
+    "aliases": ["near Del Mar", "Del Mar Heights"],
+    "kind": "neighborhood",
+    "lat": 32.9595,
+    "lon": -117.2653,
+    "source": "cached fixture",
+    "scraped_at": null
+  },
+  {
+    "id": "rimac",
+    "name": "RIMAC",
+    "aliases": ["RIMAC Arena", "UCSD RIMAC", "Rimac"],
+    "kind": "shelter",
+    "lat": 32.8854,
+    "lon": -117.2394,
+    "source": "cached fixture",
+    "scraped_at": null
+  },
+  {
+    "id": "genesee-ave",
+    "name": "Genesee Avenue",
+    "aliases": ["Genesee", "on Genesee"],
+    "kind": "road",
+    "lat": 32.875,
+    "lon": -117.215,
+    "source": "cached fixture",
+    "scraped_at": null
+  },
+  {
+    "id": "ucsd",
+    "name": "UC San Diego",
+    "aliases": ["UCSD", "University of California San Diego"],
+    "kind": "campus",
+    "lat": 32.8801,
+    "lon": -117.234,
+    "source": "cached fixture",
     "scraped_at": null
   }
 ]

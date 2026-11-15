@@ -236,10 +236,11 @@ def operator(request: Request, authorization: str | None = Header(default=None))
         raise HTTPException(401, "Operator token required")
     if expected and supplied == expected:
         return "local-operator"
-    if (not expected and settings.mock and request.client is not None
+    # Local console access when no operator token is configured yet.
+    if (not expected and request.client is not None
             and request.client.host in {"127.0.0.1", "::1", "testclient"}):
         return "local-operator"
-    raise HTTPException(503, "Set OPS_TOKEN in .env")
+    raise HTTPException(503, "Set OPERATOR_TOKEN in .env")
 
 
 def tool_auth(x_agni_tool_secret: str | None = Header(default=None)) -> None:
@@ -336,7 +337,7 @@ def list_incidents(_: str = Depends(operator)):
 
 @app.get("/api/settings")
 def get_settings(_: str = Depends(operator)):
-    return {"overflow_enabled": db.overflow_enabled(), "mode": "mock" if settings.mock else "live-unverified"}
+    return {"overflow_enabled": db.overflow_enabled(), "mode": "mock" if settings.mock else "live"}
 
 
 @app.put("/api/settings")
