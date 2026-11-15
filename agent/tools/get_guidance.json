@@ -1,0 +1,20 @@
+{
+  "type": "webhook",
+  "name": "get_guidance",
+  "description": "Read cached guidance. Speak ETA only if eta_s is present.",
+  "api_schema": {
+    "url": "{{PUBLIC_BASE_URL}}/api/tools/get_guidance",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{{ELEVENLABS_TOOL_SECRET}}",
+      "Content-Type": "application/json"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "properties": {
+        "conversation_id": { "type": "string" }
+      },
+      "required": ["conversation_id"]
+    }
+  }
+}

@@ -71,13 +71,21 @@ def state() -> dict[str, Any]:
             "SELECT rings.* FROM rings JOIN (SELECT incident_id,MAX(id) AS latest_id FROM rings GROUP BY incident_id) latest "
             "ON rings.id=latest.latest_id ORDER BY rings.id DESC"
         )]
+        try:
+            signals = [dict(r) for r in db.execute(
+                "SELECT * FROM signals WHERE about_fire=1 ORDER BY scraped_at DESC LIMIT 50")]
+        except Exception:
+            signals = []
+        calls = [dict(r) for r in db.execute(
+            "SELECT id,incident_id,direction,language,state,landmark_text,started_at FROM calls "
+            "WHERE state IN ('live','human') ORDER BY started_at DESC")]
     for h in hazards:
         h["geometry"] = json.loads(h.pop("geometry_json") or "null")
     for ring in rings:
         ring["geometry"] = json.loads(ring.pop("geom_json"))
         ring["wind"] = json.loads(ring.pop("wind_json"))
     return {"incidents": incidents, "units": units, "hazards": hazards, "merges": merges,
-            "rings": rings, "last_seq": last}
+            "rings": rings, "signals": signals, "calls": calls, "last_seq": last}
 
 
 def incident(iid: str) -> dict[str, Any] | None:

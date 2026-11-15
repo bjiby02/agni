@@ -43,6 +43,9 @@ from . import merge as merge_service
 from . import spread
 from . import warnings as warning_service
 from . import routing
+from . import evidence as evidence_service
+from . import pollers
+from .services import serial_bridge, eleven, gemini, neon
 from sim import surge as surge_runner
 import feeds
 import geo
@@ -133,6 +136,19 @@ class SurgeInput(BaseModel):
     seconds: int = Field(default=90, ge=1, le=90)
 
 
+class JumpInInput(BaseModel):
+    actor: str = Field(default="dispatcher", min_length=1, max_length=100)
+
+
+class HandBackInput(BaseModel):
+    actor: str = Field(default="dispatcher", min_length=1, max_length=100)
+
+
+class SignReportInput(BaseModel):
+    actor: str = Field(min_length=1, max_length=100)
+    edits: str = Field(default="", max_length=4000)
+
+
 async def postcall(request: Request, x_agni_webhook_signature: str | None = Header(default=None)):
     """Accept a signed completion notice. Provider header format needs a live check."""
     secret=os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
@@ -177,6 +193,7 @@ def _ensure_seed() -> None:
 async def lifespan(app: FastAPI):
     db.init()
     _ensure_seed()
+    pollers.ensure_demo_hazards()
     yield
 
 
@@ -299,12 +316,12 @@ def evidence(iid: str, _: str = Depends(operator)):
     with db.connect() as conn:
         rows=[dict(r) for r in conn.execute("SELECT * FROM evidence WHERE incident_id=? ORDER BY source",(iid,))]
     if not rows:
-        rows=[{"source":"callers","state":"empty","detail":"No caller bearings yet","age_s":None},
-              {"source":"cameras","state":"empty","detail":"Camera feed not checked yet","age_s":None},
-              {"source":"wind","state":"empty","detail":"Wind feed not checked yet","age_s":None},
-              {"source":"firms","state":"empty","detail":"No detection yet; satellite data can lag hours","age_s":None},
-              {"source":"nifc","state":"empty","detail":"No perimeter mapped; this does not rule out fire","age_s":None}]
-    return {"incident_id":iid,"rows":rows}
+        rows=evidence_service.default_rows(firms_key_set=bool(os.environ.get("FIRMS_MAP_KEY")))
+    line = evidence_service.why_line(rows)
+    if line:
+        with db.connect() as conn:
+            conn.execute("UPDATE incidents SET why_line=? WHERE id=?", (line, iid))
+    return {"incident_id":iid,"rows":rows,"why_line":line or None}
 
 
 @app.post("/api/tools/report_fire")
@@ -676,19 +693,166 @@ def dispatch(iid: str,payload: DispatchInput,idempotency_key: str=Header(alias="
                          (iid,payload.unit_id,idempotency_key,payload.approved_by,json.dumps({})))
         conn.execute("UPDATE units SET status='assigned' WHERE id=?",(payload.unit_id,))
         conn.execute("UPDATE incidents SET status='dispatched',assigned_unit=? WHERE id=?",(payload.unit_id,iid)); conn.commit()
-    data={"dispatch_id":cur.lastrowid,"unit_id":payload.unit_id,"callsign":unit["callsign"],"approved_by":payload.approved_by,"idempotency_key":idempotency_key}
+    serial = serial_bridge.write_dispatch(payload.unit_id)
+    data={"dispatch_id":cur.lastrowid,"unit_id":payload.unit_id,"callsign":unit["callsign"],
+          "approved_by":payload.approved_by,"idempotency_key":idempotency_key,"serial":serial}
     bus.emit("unit.dispatched",iid,data)
     return data
 
 
-@app.post("/api/incidents/{iid}/override")
-def override(iid: str,payload: OverrideInput,_: str=Depends(operator)):
-    incident_or_404(iid)
+def _live_call_for_incident(iid: str):
     with db.connect() as conn:
-        conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",(iid,payload.actor,"human_override",json.dumps({"note":payload.note}))); conn.commit()
-    data={"summary":payload.note,"to":"dispatcher","mode":"human_override"}
-    bus.emit("handoff.started",iid,data)
+        return conn.execute(
+            "SELECT * FROM calls WHERE incident_id=? AND state IN ('live','human') ORDER BY started_at DESC LIMIT 1",
+            (iid,),
+        ).fetchone()
+
+
+def _do_jump_in(iid: str, payload: JumpInInput, call_id: str | None = None, note: str | None = None):
+    call = None
+    if call_id:
+        with db.connect() as conn:
+            call = conn.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+        if not call:
+            raise HTTPException(404, "Call not found")
+        iid = call["incident_id"]
+    incident = incident_or_404(iid)
+    if call is None:
+        call = _live_call_for_incident(iid)
+    if not call:
+        raise HTTPException(409, "No live call to transfer")
+    with db.connect() as conn:
+        lines = [dict(r) for r in conn.execute(
+            "SELECT speaker,text,lang,ts FROM transcripts WHERE call_id=? ORDER BY id DESC LIMIT 3",
+            (call["id"],))]
+        lines.reverse()
+        conn.execute("UPDATE calls SET state='human' WHERE id=?", (call["id"],))
+        conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
+                     (iid, payload.actor, "jump_in", json.dumps({"call_id": call["id"], "note": note or ""})))
+    summary = note or gemini.handoff_summary(lines, incident)
+    transfer = eleven.transfer_to_dispatcher(call["id"], summary)
+    data = {"summary": summary, "to": "dispatcher", "mode": "jump_in",
+            "call_id": call["id"], "transfer": transfer}
+    bus.emit("handoff.started", iid, data)
     return data
+
+
+def _do_hand_back(iid: str, payload: HandBackInput, call_id: str | None = None):
+    call = None
+    if call_id:
+        with db.connect() as conn:
+            call = conn.execute("SELECT * FROM calls WHERE id=?", (call_id,)).fetchone()
+        if not call:
+            raise HTTPException(404, "Call not found")
+        iid = call["incident_id"]
+    incident_or_404(iid)
+    if call is None:
+        with db.connect() as conn:
+            call = conn.execute(
+                "SELECT * FROM calls WHERE incident_id=? AND state='human' ORDER BY started_at DESC LIMIT 1",
+                (iid,),
+            ).fetchone()
+    if not call:
+        raise HTTPException(409, "No human-held call to hand back")
+    with db.connect() as conn:
+        conn.execute("UPDATE calls SET state='live' WHERE id=?", (call["id"],))
+        conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
+                     (iid, payload.actor, "hand_back", json.dumps({"call_id": call["id"], "mode": "callback"})))
+    callback = eleven.callback_caller(call["id"], None, {"incident_id": iid, "mode": "callback"})
+    data = {"resumed_by": "agent", "mode": "callback", "call_id": call["id"], "callback": callback}
+    bus.emit("handoff.ended", iid, data)
+    return data
+
+
+@app.post("/api/incidents/{iid}/override")
+def override(iid: str, payload: OverrideInput, _: str = Depends(operator)):
+    """Legacy alias for JUMP IN when only a note is supplied."""
+    return _do_jump_in(iid, JumpInInput(actor=payload.actor), note=payload.note)
+
+
+@app.post("/api/incidents/{iid}/jump-in")
+def jump_in_incident(iid: str, payload: JumpInInput | None = None, _: str = Depends(operator)):
+    return _do_jump_in(iid, payload or JumpInInput())
+
+
+@app.post("/api/calls/{call_id}/jump-in")
+def jump_in_call(call_id: str, payload: JumpInInput | None = None, _: str = Depends(operator)):
+    return _do_jump_in("", payload or JumpInInput(), call_id=call_id)
+
+
+@app.post("/api/incidents/{iid}/hand-back")
+def hand_back_incident(iid: str, payload: HandBackInput | None = None, _: str = Depends(operator)):
+    return _do_hand_back(iid, payload or HandBackInput())
+
+
+@app.post("/api/calls/{call_id}/hand-back")
+def hand_back_call(call_id: str, payload: HandBackInput | None = None, _: str = Depends(operator)):
+    return _do_hand_back("", payload or HandBackInput(), call_id=call_id)
+
+
+@app.get("/api/incidents/{iid}/report")
+def get_report(iid: str, _: str = Depends(operator)):
+    incident = incident_or_404(iid)
+    with db.connect() as conn:
+        prior = conn.execute("SELECT * FROM reports WHERE incident_id=?", (iid,)).fetchone()
+        events = [dict(r) for r in conn.execute(
+            "SELECT type,ts,data_json FROM events WHERE incident_id=? ORDER BY seq", (iid,))]
+    if prior:
+        return dict(prior) | {"clock": json.loads(prior["clock_json"] or "{}")}
+    draft = gemini.report_draft(
+        [{"type": e["type"], "ts": e["ts"], "data": json.loads(e["data_json"])} for e in events],
+        incident,
+    )
+    clock = {
+        "first_event_ts": events[0]["ts"] if events else None,
+        "last_event_ts": events[-1]["ts"] if events else None,
+        "event_count": len(events),
+    }
+    with db.connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO reports(incident_id,draft,clock_json) VALUES(?,?,?)",
+                     (iid, draft, json.dumps(clock)))
+    return {"incident_id": iid, "draft": draft, "signed_by": None, "signed_at": None, "clock": clock}
+
+
+@app.post("/api/incidents/{iid}/report/sign")
+def sign_report(iid: str, payload: SignReportInput, _: str = Depends(operator)):
+    incident_or_404(iid)
+    report = get_report(iid, _)
+    draft = payload.edits.strip() or report["draft"]
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE reports SET draft=?,signed_by=?,signed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE incident_id=?",
+            (draft, payload.actor, iid),
+        )
+        conn.execute("UPDATE incidents SET status='closed',closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                     (iid,))
+        conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
+                     (iid, payload.actor, "sign_report", json.dumps({"clock": report.get("clock")})))
+    data = {"signed_by": payload.actor, "report": draft, "clock": report.get("clock")}
+    bus.emit("incident.closed", iid, data)
+    return {"incident_id": iid, "signed_by": payload.actor, "draft": draft, "clock": report.get("clock")}
+
+
+@app.post("/api/ops/signals/refresh")
+def refresh_signals(_: str = Depends(operator)):
+    return pollers.refresh_crowd_signals()
+
+
+@app.get("/api/signals")
+def list_signals(_: str = Depends(operator)):
+    with db.connect() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM signals ORDER BY scraped_at DESC LIMIT 100")]
+    return {"signals": rows, "count": len(rows)}
+
+
+@app.post("/api/ops/reset")
+def reset_calm(_: str = Depends(operator)):
+    """Reset practice state for the next judge. Does not touch measured sim.json/eval.json."""
+    with db.connect() as conn:
+        conn.execute("UPDATE calls SET state='ended',ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE state IN ('live','human')")
+        conn.execute("UPDATE units SET status='available'")
+        conn.execute("UPDATE settings SET overflow_enabled=0,updated_by='reset',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
+    return neon.reset_to_calm()
 
 
 @app.get("/api/events")

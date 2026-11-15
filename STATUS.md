@@ -4,37 +4,37 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 
 | Task | Status | Evidence or next step |
 |---|---|---|
-| T0 Repo, config, mock switch, database, event bus and SSE | LIVE-UNVERIFIED | Offline event replay and caller-guidance API checks pass when the web stack is available. The default offline suite skips those checks when FastAPI is not installed. |
-| T1 Voice tools and post-call webhook | LIVE-UNVERIFIED | Intake, bearing, needs, guidance, rescue, transcript and signed post-call routes are in progress. Mock API tests and ElevenLabs payload verification remain. H2/H3/H10 are needed for live calls. |
-| T2 Dispatcher console shell | LIVE-UNVERIFIED | Responsive console now reads the AGNI state and event APIs. `npm run build` passes. Browser preview is blocked by the local-server sandbox policy; end-to-end UI proof remains. |
-| T3 Landmark location and bearings | LIVE-UNVERIFIED | The landmark resolver only pins a cached record; unknown places remain unpinned. Offline matching tests pass. H4 and a live cached landmark import are needed. |
-| T4 Camera wall and triage | LIVE-UNVERIFIED | Gemini box normalization, unknown fallback and frame caching pass offline tests. H4 is needed for live Gemini and camera checks. |
-| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | Confirm/reject routes exist. Evidence ages, gray unknown states and acceptance tests remain. H7 is needed for live satellite data. |
-| T6 Merge suggestions and undo | LIVE-UNVERIFIED | Offline tests prove suggest-only merge, human accept and undo restore the original row. |
-| T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | Closure avoidance and downwind shelter refusal pass offline tests. Fallback routes remain labeled estimates. H8 is needed for live ORS. |
-| T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Dispatch idempotency exists. Serial adapter and one-write test remain. H9 is needed for the hardware check. |
-| T9 Bright Data pollers and classifier | BLOCKED | Fixture poller remains. H5 is needed for live Bright Data zones, token and dataset IDs. |
-| T10 JUMP IN and callback hand-back | BLOCKED | Mock transfer path remains. H10 is needed for phone checks. |
-| T11 Wind spread ring | LIVE-UNVERIFIED | A 100 m-cell, 10 km model grid produces a labeled 30-minute downwind estimate. The NW-wind test passes. |
-| T12 Targeted warning and rescue | LIVE-UNVERIFIED | The warning API needs human confirmation, a ring and opted-in recipients. Offline tests reject unlisted contacts. H10 is needed for live calls. |
-| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | The isolated SQLite surge rehearsal processed 75 calls into 3 visible incidents in 0.64 s and wrote `backend/sim/sim.json`. H6 is needed for Neon branches. |
-| T14 After-action report and measured proof panel | BLOCKED | Must read measured `sim.json` and `eval.json` only. |
-| T15 Evaluation harness | BLOCKED | Persona and fixture evaluation remain. |
-| T16 Stretch integrations | BLOCKED | Tiger Data only if the surge counter needs it. Solana is cut in v2. |
-| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | README is updated. A mock end-to-end intake-to-dispatch workflow passed. `make demo` and the acceptance checklist remain. H11 is needed for Devpost submission. |
+| T0 Repo, config, mock switch, database, event bus and SSE | DONE | Offline SSE replay and reconnect tests pass. `make test` green. |
+| T1 Voice tools and post-call webhook | LIVE-UNVERIFIED | Tool routes + signed post-call exist; mock tool tests pass. Live phone needs H2/H3/H10. |
+| T2 Dispatcher console shell | LIVE-UNVERIFIED | React console: Leaflet CARTO dark_matter, fire rows, why_line, NEW badge, keyboard map, JUMP IN. `npm run build` passes. Browser E2E not run in sandbox. |
+| T3 Landmark location and bearings | LIVE-UNVERIFIED | Cached landmark match + bearing ellipse offline tests pass. Live Gemini extract needs H4. |
+| T4 Camera wall and triage | LIVE-UNVERIFIED | Vision normalize/cache/`cant_tell` offline tests pass. Live frames need H4. |
+| T5 Evidence stack and human confirm/reject | LIVE-UNVERIFIED | Evidence API + why_line + Confirm/Reject. FIRMS shows gray “Key not set” without H7. |
+| T6 Merge suggestions and undo | DONE | Offline tests: suggest-only, accept, undo restore. |
+| T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | Closure avoidance + downwind refusal offline tests pass. Live ORS needs H8. |
+| T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Dispatch idempotency + mock serial `D42\n` recorded. Hardware buzz needs H9. |
+| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | Fixture SERP → `signal.new` unverified. HTTP blocked while call live (test). Live zones need H5. |
+| T10 JUMP IN and callback hand-back | LIVE-UNVERIFIED | Mock jump-in + hand-back emit `handoff.started` / `handoff.ended{resumed_by:agent,mode:callback}`. Live transfer needs H10. |
+| T11 Wind spread ring | DONE | 100 m / 10 km / 30-min estimate; NW wind test passes. |
+| T12 Targeted warning and rescue | LIVE-UNVERIFIED | Opt-in + ring filter + Press-1 → `rescue.requested`. Mock queues only. Live dial needs H10. |
+| T13 Neon branches and surge simulation | LIVE-UNVERIFIED | SQLite isolated surge → `sim.json`. Neon branches BLOCKED on H6. |
+| T14 After-action report and proof panel | DONE | Draft from events; Sign closes; `/api/proof` reads only `sim.json`/`eval.json` or null. |
+| T15 Evaluation harness | LIVE-UNVERIFIED | `make eval` writes fixture-measured `eval.json` with `n` per metric. Live personas need H2/H10. |
+| T16 Stretch integrations | BLOCKED | Cut per A8 until T0–T14 are live-green. Solana cut in v2. |
+| T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | `make demo` runs storyboard path in mock. Devpost submit is H11. |
 
 ## Needs the account owner
 
-- H1: Done. The independent public repository is configured and `main` is pushed.
-- H2-H3: ElevenLabs and Twilio accounts, keys and phone integration.
+- H1: Done. Public repo configured.
+- H2–H3: ElevenLabs + Twilio keys and phone import.
 - H4: Gemini API key.
-- H5: Bright Data zones, token and dataset IDs.
-- H6: Neon project and API key.
+- H5: Bright Data zones, token, dataset IDs.
+- H6: Neon project + API key.
 - H7: NASA FIRMS map key.
 - H8: OpenRouteService key.
-- H9: Connect the Arduino Uno and flash its firmware.
-- H10: Add only opted-in phone numbers, set the dispatcher number and answer test calls.
-- H11: Submit the Devpost entry.
+- H9: Flash `hardware/uno_station/uno_station.ino` and set `SERIAL_PORT`.
+- H10: Opt-in phones in `seed/warn_list.json`, `DISPATCHER_PHONE_NUMBER`, answer test calls.
+- H11: Devpost submit.
 
 Enter keys in local `.env`. Do not send keys in chat.
 

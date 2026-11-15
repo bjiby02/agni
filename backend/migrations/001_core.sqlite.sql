@@ -64,3 +64,11 @@ CREATE TABLE IF NOT EXISTS warnings(
   recipients INTEGER NOT NULL, languages_json TEXT NOT NULL, message_key TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+CREATE TABLE IF NOT EXISTS signals(
+  id TEXT PRIMARY KEY, source TEXT NOT NULL, url TEXT, text TEXT NOT NULL,
+  about_fire INTEGER, place_text TEXT, confidence TEXT, lat REAL, lon REAL,
+  incident_id TEXT, scraped_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+CREATE TABLE IF NOT EXISTS reports(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, incident_id TEXT NOT NULL UNIQUE,
+  draft TEXT NOT NULL, signed_by TEXT, signed_at TEXT, clock_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));

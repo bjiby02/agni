@@ -1,0 +1,26 @@
+[
+  {
+    "id": "sig_reddit_tp1",
+    "source": "reddit",
+    "url": "https://example.invalid/r/sandiego/smoke1",
+    "text": "Anyone else see smoke near Torrey Pines? Looks like a brush fire.",
+    "lat": 32.867,
+    "lon": -117.252
+  },
+  {
+    "id": "sig_x_tp2",
+    "source": "x",
+    "url": "https://example.invalid/x/status/smoke2",
+    "text": "Heavy smoke blowing toward Del Mar from the hills.",
+    "lat": 32.870,
+    "lon": -117.248
+  },
+  {
+    "id": "sig_serp_other",
+    "source": "serp",
+    "url": "https://example.invalid/news/traffic",
+    "text": "Morning traffic update for I-5 northbound.",
+    "lat": null,
+    "lon": null
+  }
+]

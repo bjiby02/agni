@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "id": "opt_in_judge_1",
+    "phone": "+15555550101",
+    "lat": 32.910,
+    "lon": -117.170,
+    "opted_in": true,
+    "language": "en",
+    "label": "demo-judge"
+  },
+  {
+    "id": "opt_in_team_1",
+    "phone": "+15555550102",
+    "lat": 32.908,
+    "lon": -117.168,
+    "opted_in": true,
+    "language": "es",
+    "label": "demo-team"
+  },
+  {
+    "id": "opt_in_torrey",
+    "phone": "+15555550103",
+    "lat": 32.866,
+    "lon": -117.250,
+    "opted_in": true,
+    "language": "en",
+    "label": "demo-torrey"
+  },
+  {
+    "id": "not_opted",
+    "phone": "+15555550999",
+    "lat": 32.910,
+    "lon": -117.170,
+    "opted_in": false,
+    "language": "en",
+    "label": "must-refuse"
+  }
+]

@@ -6,7 +6,7 @@ AGNI does not replace 911 or the dispatch center. It is not connected to a publi
 
 ## Start the API
 
-Python 3.11 or later is required.
+Python 3.11 or later is required. Follow [AGENTS.md](AGENTS.md) for process and contracts.
 
 ```sh
 cp .env.example .env
@@ -29,6 +29,16 @@ npm run dev
 
 Open the Vite address. To show live camera stills and public feeds, set `AGNI_MOCK=0` in local `.env`. Live integrations remain unverified until the live checks pass.
 
+## Mock demo
+
+```sh
+make test
+make demo
+make eval
+```
+
+`make demo` walks the storyboard path in mock mode (signal → call → confirm → dispatch → JUMP IN → ring → warning → rescue → close). `make eval` writes measured fixture metrics to `backend/ml/eval/eval.json`.
+
 ## Work status
 
 See [STATUS.md](STATUS.md) for task progress, live verification and setup that needs an account owner. See [DECISIONS.md](DECISIONS.md) for implementation choices.
@@ -37,6 +47,7 @@ See [STATUS.md](STATUS.md) for task progress, live verification and setup that n
 
 ```sh
 make test
+make live-check
 ```
 
 Unit tests must run offline. Do not put keys in chat or source control. Add local keys to `.env` only. Do not enable outbound calls until the opt-in list and phone integrations are set up.

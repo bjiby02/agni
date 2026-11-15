@@ -1,0 +1,22 @@
+{
+  "type": "webhook",
+  "name": "request_rescue",
+  "description": "Caller pressed 1 or said help on a warning call.",
+  "api_schema": {
+    "url": "{{PUBLIC_BASE_URL}}/api/tools/request_rescue",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{{ELEVENLABS_TOOL_SECRET}}",
+      "Content-Type": "application/json"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "properties": {
+        "conversation_id": { "type": "string" },
+        "digits": { "type": "string" },
+        "said_help": { "type": "boolean" }
+      },
+      "required": ["conversation_id"]
+    }
+  }
+}

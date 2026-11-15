@@ -1,0 +1,23 @@
+{
+  "type": "webhook",
+  "name": "set_needs",
+  "description": "Flag mobility needs and companion count.",
+  "api_schema": {
+    "url": "{{PUBLIC_BASE_URL}}/api/tools/set_needs",
+    "method": "POST",
+    "request_headers": {
+      "X-Agni-Tool-Secret": "{{ELEVENLABS_TOOL_SECRET}}",
+      "Content-Type": "application/json"
+    },
+    "request_body_schema": {
+      "type": "object",
+      "properties": {
+        "conversation_id": { "type": "string" },
+        "mobility": { "type": "boolean" },
+        "people": { "type": "integer" },
+        "notes": { "type": "string" }
+      },
+      "required": ["conversation_id"]
+    }
+  }
+}

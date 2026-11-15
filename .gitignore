@@ -6,7 +6,9 @@ data/*.db-shm
 data/*.sqlite
 data/*.sqlite-wal
 data/*.sqlite-shm
+data/agni-demo.sqlite*
 data/api_token
+backend/tests/fixtures/live/
 devcert/
 
 # config that belongs in the repo

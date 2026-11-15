@@ -1,22 +1,25 @@
-.PHONY: test dev seed demo eval live-check
+.PHONY: test dev seed demo eval live-check surge agents
 
 test:
-	cd backend && AGNI_MOCK=1 python3 -m unittest discover -s tests -v
+	cd backend && AGNI_MOCK=1 ../.venv/bin/python3 -m unittest discover -s tests -v
 
 dev:
-	cd backend && AGNI_MOCK=1 uvicorn agni.main:app --reload --host 127.0.0.1 --port 8000
+	cd backend && AGNI_MOCK=1 ../.venv/bin/uvicorn agni.main:app --reload --host 127.0.0.1 --port 8000
 
 seed:
-	cd backend && python3 -c 'from agni.db import init; init()'
+	cd backend && ../.venv/bin/python3 -c 'from agni.db import init; from agni import pollers; init(); pollers.ensure_demo_hazards()'
 
 demo:
-	@echo "Demo replay is not implemented yet. See STATUS.md (T17)."
+	AGNI_MOCK=1 .venv/bin/python3 scripts/demo.py
 
 eval:
-	@echo "Evaluation harness is not implemented yet. See STATUS.md (T15)."
+	AGNI_MOCK=1 .venv/bin/python3 backend/ml/eval/run_eval.py
 
 surge:
-	cd backend && AGNI_MOCK=1 python3 sim/surge.py --n 75 --seconds 90
+	cd backend && AGNI_MOCK=1 ../.venv/bin/python3 sim/surge.py --n 75 --seconds 90
 
 live-check:
-	@python3 scripts/live_check.py
+	.venv/bin/python3 scripts/live_check.py
+
+agents:
+	.venv/bin/python3 scripts/create_agents.py
