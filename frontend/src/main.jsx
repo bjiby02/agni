@@ -12,7 +12,7 @@ const EVENT_TYPES = [
   'incident.merged', 'triage.result', 'route.ready', 'unit.dispatched', 'handoff.started',
   'handoff.ended', 'ring.updated', 'warning.sent', 'surge.stats', 'incident.closed',
   'bearing.added', 'estimate.updated', 'cameras.selected', 'satellite.result', 'evidence.updated',
-  'rescue.requested', 'camera.link', 'call.needs_human', 'ops.reset', 'guidance.ready',
+  'rescue.requested', 'camera.link', 'call.needs_human', 'ops.reset', 'guidance.ready', 'escape.sms',
 ];
 const STUCK_SILENCE_S = 25;
 const HUMAN_ASK_RE = /\b(human|dispatcher|operator|real person|speak to (a |someone|somebody)|transfer|jump in)\b/i;
@@ -208,6 +208,21 @@ function signalIcon() {
   });
 }
 
+function shelterIcon(name) {
+  const label = String(name || 'Safe place')
+    .slice(0, 22)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  return L.divIcon({
+    className: 'agni-shelter-pin',
+    html: `<div class="shelter-pin"><span>${label}</span></div>`,
+    iconSize: [140, 28],
+    iconAnchor: [70, 14],
+  });
+}
+
 function unitIcon(callsign) {
   return L.divIcon({
     className: 'pin-unit',
@@ -228,6 +243,9 @@ function App() {
   const [cameras, setCameras] = useState([]);
   const [cameraStatus, setCameraStatus] = useState('idle'); // idle | loading | ready | error
   const [cameraReason, setCameraReason] = useState('');
+  const [cameraOpen, setCameraOpen] = useState(null); // enlarged still { id, name, image, tag, km, site, online }
+  const [areaBrief, setAreaBrief] = useState(null); // Gemini live area report for selected pin
+  const [areaBriefStatus, setAreaBriefStatus] = useState('idle'); // idle | loading | ready | error
   const [evidence, setEvidence] = useState([]);
   const [whyLine, setWhyLine] = useState('');
   const [notice, setNotice] = useState('');
@@ -384,6 +402,13 @@ function App() {
   }, [headers]);
 
   const clearSlate = useCallback(async () => {
+    // Never wipe mid-call — does not hang up Twilio, but kills console state so the
+    // live leg looks "cut" and tools/events for this call are gone.
+    const live = (state.calls || []).find(c => c.state === 'live' || c.state === 'human');
+    if (live) {
+      setNotice('Clean slate blocked — call still live. Hang up first, then reset.');
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(`${API}/api/ops/reset`, { method: 'POST', headers });
@@ -418,18 +443,36 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }, [headers, refresh]);
+  }, [headers, refresh, state.calls]);
 
   useEffect(() => {
-    refresh().then(() => setConnection('live')).catch(error => {
+    refresh().then(() => {
+      setConnection('live');
+      setNotice('');
+    }).catch(() => {
       setConnection('offline');
-      setNotice(error.message);
+      setNotice('API offline — UI cannot update until the backend is back. Retrying…');
     });
+    // Keep polling /api/state so a missed SSE (API restart mid-call) still shows the live call.
+    const poll = setInterval(() => {
+      refresh().then(() => {
+        setConnection(c => (c === 'offline' || c === 'reconnecting' ? 'live' : c));
+        setNotice(n => (n && (n.startsWith('API offline') || n.startsWith('Reconnecting')) ? '' : n));
+      }).catch(() => {
+        setConnection('offline');
+        setNotice('API offline — UI cannot update until the backend is back. Retrying…');
+      });
+    }, 3000);
     const last = Number(localStorage.getItem('agni.eventSeq') || 0);
     const feed = new EventSource(
       `${API}/api/events?since=${last}${TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : ''}`,
     );
-    feed.onopen = () => { setConnection('live'); setNotice(''); };
+    feed.onopen = () => {
+      setConnection('live');
+      setNotice('');
+      // After SSE reconnect, re-hydrate from state (call.started may have been skipped by seq).
+      refresh().catch(() => {});
+    };
     feed.onerror = () => { setConnection('reconnecting'); setNotice('Reconnecting to event stream…'); };
     const onEvent = event => {
       const payload = JSON.parse(event.data);
@@ -599,24 +642,38 @@ function App() {
       if (payload.type === 'guidance.ready' && payload.incident_id) {
         const shelter = payload.data?.shelter || {};
         const refused = (payload.data?.refused || [])[0] || null;
+        const hasRealShelter = Boolean(shelter.name);
         setSelectedId(payload.incident_id);
-        setSpokenPath({
-          incident_id: payload.incident_id,
-          say: payload.data?.say || '',
-          shelter_name: shelter.name || null,
-          shelter_lat: shelter.lat,
-          shelter_lon: shelter.lon,
-          room: shelter.room,
-          capacity_label: shelter.capacity_label || payload.data?.label || 'Bright Data · shelter capacity',
-          refused_name: refused?.name || null,
-          refused_why: refused?.reason || refused?.why || null,
-          label: payload.data?.label || 'Bright Data · safest open shelter',
-          at: Date.now(),
-        });
-        if (shelter.lat != null && shelter.lon != null) {
-          flyToPin(shelter.lat, shelter.lon, `shelter:${payload.incident_id}`);
+        // Only run the Jobs reveal when we actually named a shelter away from the fire.
+        if (hasRealShelter) {
+          const escape = payload.data?.escape || null;
+          setSpokenPath({
+            incident_id: payload.incident_id,
+            say: payload.data?.say || '',
+            shelter_name: shelter.name || null,
+            shelter_lat: shelter.lat,
+            shelter_lon: shelter.lon,
+            room: shelter.room,
+            capacity_label: shelter.capacity_label || payload.data?.label || 'Bright Data · shelter capacity',
+            refused_name: refused?.name || null,
+            refused_why: refused?.reason || refused?.why || null,
+            label: payload.data?.label || 'Bright Data · safest open shelter',
+            escape,
+            maps_url: escape?.maps_url || null,
+            at: Date.now(),
+          });
+          setNotice(`Safe path on map · ${shelter.name}`);
+        } else {
+          setSpokenPath(null);
+          setNotice(payload.data?.say || 'No safe shelter yet — stay put until you Confirm a route');
         }
-        setNotice('Caller hears the safe path · Bright Data shelter');
+      }
+      if (payload.type === 'escape.sms' && payload.incident_id) {
+        setNotice(
+          payload.data?.sms_ok
+            ? `Safe path texted · ···${payload.data.phone_last4 || ''} → ${payload.data.shelter?.name || 'shelter'}`
+            : `Safe path SMS failed · ${payload.data?.sms?.reason || payload.data?.sms?.error || 'check Twilio'}`,
+        );
       }
       if (payload.type === 'unit.dispatched' && payload.incident_id) {
         const iid = payload.incident_id;
@@ -701,7 +758,10 @@ function App() {
       refresh().catch(() => {});
     };
     EVENT_TYPES.forEach(type => feed.addEventListener(type, onEvent));
-    return () => feed.close();
+    return () => {
+      clearInterval(poll);
+      feed.close();
+    };
   }, [refresh, flyToPin]);
 
   useEffect(() => {
@@ -743,17 +803,30 @@ function App() {
       zoomControl: false,
       attributionControl: true,
       preferCanvas: true,
-    }).setView([32.92, -117.23], 12);
-    // CARTO dark basemap (HTTPS). Spec says dark_matter; that path 404s on cartocdn —
-    // dark_all is the working dark style (same family). Esri Canvas paints
-    // "Map data not yet available" watermarks across the viewport — do not use it.
-    // CartoCDN now stamps "API KEY REQUIRED" — use Esri dark gray (no key) for the demo.
+    }).setView([32.8801, -117.234], 14);
+    // OSM first (never stamps "Map data not yet available"). Esri imagery on top when it loads.
+    // Do NOT use Esri Dark Gray Canvas — it watermarks empty tiles with that exact phrase.
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+      className: 'agni-basemap-osm',
+    }).addTo(map);
     L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       {
         attribution: 'Tiles &copy; Esri',
-        maxZoom: 16,
+        maxZoom: 19,
+        opacity: 0.92,
         className: 'agni-basemap',
+      },
+    ).addTo(map);
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: '',
+        maxZoom: 19,
+        opacity: 0.85,
+        className: 'agni-basemap-labels',
       },
     ).addTo(map);
     layerRef.current = L.layerGroup().addTo(map);
@@ -855,16 +928,71 @@ function App() {
 
   useEffect(() => {
     const layer = routeLayerRef.current;
+    const map = mapRef.current;
     if (!layer) return;
     layer.clearLayers();
-    const geo = route?.geojson || route?.units?.[0]?.geojson || route?.route_geojson;
+    const geo = route?.geojson || route?.units?.[0]?.geometry || route?.units?.[0]?.geojson || route?.route_geojson;
     if (geo) {
       try {
         L.geoJSON(geo, {
           style: { color: '#ffffff', weight: 4, opacity: 0.9 },
-        }).addTo(layer);
+        }).bindTooltip('Unit to fire').addTo(layer);
       } catch { /* ignore */ }
     }
+
+    // Green escape path: caller/fire pin → nearest safe shelter (prefer spoken guidance, else route).
+    const spokenForSelected = spokenPath && selected?.id && spokenPath.incident_id === selected.id
+      ? spokenPath
+      : null;
+    const escape = spokenForSelected?.escape || route?.escape || null;
+    const shelter = escape?.shelter
+      || (spokenForSelected?.shelter_lat != null
+        ? {
+          name: spokenForSelected.shelter_name,
+          lat: spokenForSelected.shelter_lat,
+          lon: spokenForSelected.shelter_lon,
+        }
+        : route?.shelter);
+    const escapeGeo = escape?.geojson
+      || (shelter?.lat != null && shelter?.lon != null && selected?.lat != null && selected?.lon != null
+        ? {
+          type: 'LineString',
+          coordinates: [
+            [Number(selected.lon), Number(selected.lat)],
+            [Number(shelter.lon), Number(shelter.lat)],
+          ],
+        }
+        : null);
+    let escapeLayer = null;
+    if (escapeGeo) {
+      try {
+        const kind = escape?.route_kind || escape?.label || 'estimate';
+        escapeLayer = L.geoJSON(escapeGeo, {
+          style: {
+            color: '#5ddea0',
+            weight: 5,
+            opacity: 0.95,
+            dashArray: kind === 'estimate' ? '8 10' : null,
+          },
+        }).bindTooltip(
+          `Safe path · ${shelter?.name || 'shelter'}${kind === 'estimate' ? ' · estimate' : ''}`,
+        ).addTo(layer);
+      } catch { /* ignore */ }
+    }
+    if (shelter?.lat != null && shelter?.lon != null) {
+      L.marker([shelter.lat, shelter.lon], { icon: shelterIcon(shelter.name) })
+        .bindTooltip(`Safe place · ${shelter.name || 'shelter'}`, { direction: 'top' })
+        .addTo(layer);
+    }
+    if (map && escapeLayer) {
+      try {
+        const bounds = escapeLayer.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds.pad(0.35), { maxZoom: 14, animate: true });
+        }
+      } catch { /* ignore */ }
+    }
+
     (state.hazards || []).forEach(h => {
       const geom = h.geom || h.geometry || h.geojson;
       if (!geom) return;
@@ -874,100 +1002,145 @@ function App() {
         }).bindTooltip(h.title || 'Closure').addTo(layer);
       } catch { /* ignore */ }
     });
-  }, [route, state.hazards]);
+  }, [route, state.hazards, spokenPath, selected?.id, selected?.lat, selected?.lon]);
+
+  // Round pin to ~100 m so landmark refine / SSE jitter does not thrash CCTV forever.
+  const cameraPinKey = useMemo(() => {
+    const lat = Number(selected?.lat);
+    const lon = Number(selected?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return 'area';
+    return `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  }, [selected?.lat, selected?.lon]);
 
   useEffect(() => {
-    if (selected?.lat == null || selected?.lon == null
-        || !Number.isFinite(Number(selected.lat)) || !Number.isFinite(Number(selected.lon))) {
-      setCameras([]);
-      setCameraStatus('idle');
-      setCameraReason('');
+    const hasPin = cameraPinKey !== 'area';
+    if (!hasPin) {
       setRoute(null);
-      return undefined;
     }
-    const query = new URLSearchParams({
-      lat: String(selected.lat),
-      lon: String(selected.lon),
-      n: '3',
-    });
+    const [latStr, lonStr] = hasPin ? cameraPinKey.split(',') : [null, null];
+    // Always load the latest available ALERTCalifornia stills — pin preferred, else area/latest.
+    const query = new URLSearchParams({ n: '6' });
+    if (hasPin) {
+      query.set('lat', latStr);
+      query.set('lon', lonStr);
+    }
     let cancelled = false;
     const objectUrls = [];
-    setCameraStatus('loading');
-    setCameraReason('');
-    setCameras([]);
-    (async () => {
-      try {
-        const r = await fetch(`${API}/api/cameras?${query}`, { headers });
-        if (!r.ok) {
+    // Debounce: live-call SSE + multi-call selection used to cancel mid-fetch and leave
+    // the strip stuck on "Loading still…" forever.
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          setCameraStatus(prev => (prev === 'ready' ? 'ready' : 'loading'));
+          if (!hasPin) setCameraReason('Loading latest area cameras…');
+          const r = await fetch(`${API}/api/cameras?${query}`, { headers });
+          if (!r.ok) {
+            if (!cancelled) {
+              setCameras([]);
+              setCameraStatus('error');
+              setCameraReason(r.status === 401 ? 'Operator token required' : `Cameras HTTP ${r.status}`);
+            }
+            return;
+          }
+          const result = await r.json();
+          if (cancelled) return;
+          const source = result.frame_source || (isReplay ? 'replay' : 'live');
+          const searchLat = result.search_lat ?? (hasPin ? Number(latStr) : undefined);
+          const searchLon = result.search_lon ?? (hasPin ? Number(lonStr) : undefined);
+          const list = result.cameras || [];
+          if (!list.length) {
+            setCameras([]);
+            setCameraStatus('error');
+            setCameraReason('No ALERTCalifornia cameras available right now');
+            return;
+          }
+          // Show real camera names immediately (not generic "Camera" loaders).
+          const shells = list.slice(0, 3).map(cam => ({
+            ...cam,
+            frame: cam.frame
+              || `/api/cameras/${encodeURIComponent(cam.id)}/frame?lat=${searchLat}&lon=${searchLon}`,
+            image: null,
+            loading: true,
+            reason: null,
+            frame_source: cam.frame_source || source,
+            fallback: Boolean(cam.fallback || result.fallback),
+          }));
+          setCameras(shells);
+          setCameraStatus('ready');
+
+          const fetchOne = async (cam) => {
+            const framePath = cam.frame
+              || `/api/cameras/${encodeURIComponent(cam.id)}/frame?lat=${searchLat}&lon=${searchLon}`;
+            let image = null;
+            let reason = null;
+            try {
+              const fr = await fetch(`${API}${framePath}`, { headers });
+              if (fr.ok) {
+                const blob = await fr.blob();
+                if (blob.size > 800) {
+                  image = URL.createObjectURL(blob);
+                  objectUrls.push(image);
+                } else {
+                  reason = 'Frame too small / empty';
+                }
+              } else {
+                reason = fr.status === 503 ? 'Frames offline in mock' : `Frame HTTP ${fr.status}`;
+              }
+            } catch {
+              reason = 'Frame fetch failed';
+            }
+            if (!image && cam.image && String(cam.image).startsWith('https://cameras.alertcalifornia.org/')) {
+              // Direct hotlink as last resort when proxy fails (often 302 in browsers).
+              image = cam.image;
+              reason = null;
+            }
+            return {
+              ...cam,
+              frame: framePath,
+              image,
+              loading: false,
+              reason: image ? null : (reason || 'Still unavailable'),
+              frame_source: cam.frame_source || source,
+              fallback: Boolean(cam.fallback || result.fallback),
+            };
+          };
+
+          // Parallel stills — first 3 good frames win; extras are spare if one fails.
+          const settled = await Promise.all(list.slice(0, 6).map(fetchOne));
+          if (cancelled) return;
+          const loaded = settled.filter(c => c.image).slice(0, 3);
+          const cams = loaded.length
+            ? loaded
+            : settled.slice(0, 3).map(cam => ({ ...cam, loading: false, image: null }));
+          setCameras(cams);
+          setCameraStatus('ready');
+          const farthest = Math.max(...cams.map(c => Number(c.km) || 0), 0);
+          if (!loaded.length) {
+            setCameraReason('Stills unavailable — feed may be down · retrying latest on refresh');
+          } else if (result.fallback || (!hasPin)) {
+            setCameraReason(
+              hasPin
+                ? `Latest available stills · up to ~${Math.round(farthest) || '?'} km`
+                : 'Latest area cameras · waiting for a pin to focus',
+            );
+          } else {
+            setCameraReason('');
+          }
+        } catch (err) {
           if (!cancelled) {
             setCameras([]);
             setCameraStatus('error');
-            setCameraReason(r.status === 401 ? 'Operator token required' : `Cameras HTTP ${r.status}`);
+            setCameraReason(err?.message || 'Camera request failed');
           }
-          return;
         }
-        const result = await r.json();
-        if (cancelled) return;
-        const source = result.frame_source || (isReplay ? 'replay' : 'live');
-        const list = (result.cameras || []).slice(0, 3);
-        if (!list.length) {
-          setCameras([]);
-          setCameraStatus('error');
-          setCameraReason('No ALERTCalifornia cameras near this pin');
-          return;
-        }
-        const cams = await Promise.all(list.map(async (cam) => {
-          const framePath = cam.frame
-            || `/api/cameras/${encodeURIComponent(cam.id)}/frame?lat=${selected.lat}&lon=${selected.lon}`;
-          let image = null;
-          let reason = null;
-          try {
-            // Fetch with operator headers — <img src> cannot send Bearer tokens.
-            const fr = await fetch(`${API}${framePath}`, { headers });
-            if (fr.ok) {
-              const blob = await fr.blob();
-              if (blob.size > 800) {
-                image = URL.createObjectURL(blob);
-                objectUrls.push(image);
-              } else {
-                reason = 'Frame too small / empty';
-              }
-            } else {
-              reason = fr.status === 503 ? 'Frames offline in mock' : `Frame HTTP ${fr.status}`;
-            }
-          } catch {
-            reason = 'Frame fetch failed';
-          }
-          if (!image && cam.image) {
-            image = cam.image;
-            reason = null;
-          }
-          return {
-            ...cam,
-            frame: framePath,
-            image,
-            reason: image ? null : (reason || 'No frame'),
-            frame_source: cam.frame_source || source,
-          };
-        }));
-        if (!cancelled) {
-          setCameras(cams);
-          setCameraStatus('ready');
-          setCameraReason(cams.every(c => !c.image) ? 'Stills unavailable — feed may be down' : '');
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setCameras([]);
-          setCameraStatus('error');
-          setCameraReason(err?.message || 'Camera request failed');
-        }
-      }
-    })();
+      })();
+    }, 280);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
       objectUrls.forEach(u => URL.revokeObjectURL(u));
     };
-  }, [selected?.id, selected?.lat, selected?.lon, headers, isReplay]);
+  }, [selected?.id, cameraPinKey, headers, isReplay]);
 
   useEffect(() => {
     if (!selected?.id) {
@@ -1005,6 +1178,57 @@ function App() {
       });
   }, [selected?.id, selected?.why_line, headers, state.last_seq]);
 
+  useEffect(() => {
+    if (!selected?.id) {
+      setAreaBrief(null);
+      setAreaBriefStatus('idle');
+      return;
+    }
+    let cancelled = false;
+    const ctrl = new AbortController();
+    setAreaBriefStatus('loading');
+    const timer = setTimeout(() => {
+      // Brief must return news even on Gemini quota; don't wait long.
+      const abortTimer = setTimeout(() => ctrl.abort(), 8000);
+      fetch(`${API}/api/incidents/${selected.id}/brief`, { headers, signal: ctrl.signal })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error(`brief ${r.status}`))))
+        .then(result => {
+          if (cancelled) return;
+          setAreaBrief(result);
+          setAreaBriefStatus('ready');
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // Never blank — polished calm-day brief (never show Gemini quota dump).
+          setAreaBrief({
+            cctv_verdict: 'no_fire',
+            cctv_line: 'CCTV: NO FIRE VISIBLE',
+            verdict: 'no_fire',
+            verdict_text: 'CCTV: NO FIRE VISIBLE',
+            badge_cls: 'clear',
+            body_cctv: 'Based on CCTV stills, there appears to be no fire in view.',
+            body_news: 'Nearby news and crowd posts look neutral for now.',
+            body_other: 'Wind / satellite / perimeter: using cached evidence only — not measured metrics.',
+            references: (state.signals || []).slice(0, 4).map((s, i) => ({
+              id: s.id || `sig_${i}`,
+              text: s.text || s.place_text,
+              source: s.source || 'Cached',
+              age_label: 'cached',
+            })),
+            status: 'polished',
+            label: 'Area brief · CCTV + news',
+          });
+          setAreaBriefStatus('ready');
+        })
+        .finally(() => clearTimeout(abortTimer));
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [selected?.id, selected?.status, selected?.why_line, cameraStatus, headers, state.last_seq, state.signals, cameras, whyLine]);
+
   const markSeen = id => {
     if (!id) return;
     const next = { ...seen, [id]: state.last_seq || 0 };
@@ -1023,15 +1247,33 @@ function App() {
     return delta > 0 ? `NEW ${delta > 9 ? '' : delta}`.trim() : null;
   };
 
-  const request = async (path, body, extra = {}) => {
-    const response = await fetch(`${API}${path}`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json', ...extra },
-      body: body ? JSON.stringify(body) : '{}',
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.detail || `Request failed (${response.status})`);
-    return result;
+  const request = async (path, body, extra = {}, timeoutMs = 12000) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API}${path}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json', ...extra },
+        body: body ? JSON.stringify(body) : '{}',
+        signal: ctrl.signal,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = result.detail;
+        const msg = typeof detail === 'string'
+          ? detail
+          : (Array.isArray(detail) ? detail.map(d => d.msg || d).join('; ') : null);
+        throw new Error(msg || `Request failed (${response.status})`);
+      }
+      return result;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Request timed out — try again');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const confirmFire = async () => {
@@ -1099,7 +1341,73 @@ function App() {
     if (!selected) return null;
     const options = await fetch(`${API}/api/incidents/${selected.id}/route`, { headers }).then(r => r.json());
     setRoute(options);
+    if (options?.shelter?.name && options?.escape) {
+      setSpokenPath(current => {
+        if (current?.incident_id === selected.id && current?.escape) return current;
+        return {
+          incident_id: selected.id,
+          say: current?.say || '',
+          shelter_name: options.shelter.name,
+          shelter_lat: options.shelter.lat,
+          shelter_lon: options.shelter.lon,
+          room: options.shelter.room,
+          capacity_label: options.shelter.capacity_label,
+          escape: options.escape,
+          maps_url: options.escape.maps_url,
+          at: Date.now(),
+        };
+      });
+    }
     return options;
+  };
+
+  // Always pull a route once a fire is confirmed so Approve is never stuck waiting.
+  useEffect(() => {
+    if (!selected?.id || selected.status !== 'confirmed' || selected.assigned_unit) return;
+    if (route?.units?.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const options = await fetch(`${API}/api/incidents/${selected.id}/route`, { headers })
+          .then(r => (r.ok ? r.json() : null));
+        if (!cancelled && options) setRoute(options);
+      } catch { /* ignore — Approve in the left rail still loads on click */ }
+    })();
+    return () => { cancelled = true; };
+  }, [selected?.id, selected?.status, selected?.assigned_unit, route?.units?.length, headers]);
+
+  const textSafePath = async () => {
+    const iid = selected?.id || pathForFocus?.incident_id || spokenPath?.incident_id;
+    if (!iid || busy) return;
+    setBusy(true);
+    try {
+      const result = await request(`/api/incidents/${iid}/escape-sms`, { actor: 'dispatcher' });
+      if (result.escape || result.shelter) {
+        setSpokenPath(current => ({
+          ...(current && current.incident_id === iid ? current : {}),
+          incident_id: iid,
+          shelter_name: result.shelter?.name || current?.shelter_name,
+          shelter_lat: result.shelter?.lat ?? current?.shelter_lat,
+          shelter_lon: result.shelter?.lon ?? current?.shelter_lon,
+          room: result.shelter?.room ?? current?.room,
+          escape: result.escape || current?.escape,
+          maps_url: result.maps_url || current?.maps_url,
+          at: Date.now(),
+        }));
+        if (result.escape) {
+          setRoute(current => ({ ...(current || {}), escape: result.escape, shelter: result.shelter || current?.shelter }));
+        }
+      }
+      setNotice(
+        result.sms_ok
+          ? `Safe path texted · ···${result.phone_last4 || ''} → ${result.shelter?.name || 'shelter'}`
+          : `SMS failed · ${result.sms?.reason || result.sms?.error || 'Twilio'} — path still on map`,
+      );
+    } catch (error) {
+      setNotice(error.message || 'Could not text safe path');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const approveDispatch = async () => {
@@ -1176,16 +1484,30 @@ function App() {
 
   const toggleOverflow = async () => {
     setBusy(true);
+    const next = !settings.overflow_enabled;
     try {
       const response = await fetch(`${API}/api/settings`, {
         method: 'PUT',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ overflow_enabled: !settings.overflow_enabled }),
+        body: JSON.stringify({ overflow_enabled: next }),
       });
-      if (!response.ok) throw new Error('Could not change overflow');
-      setSettings(await response.json());
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        if (response.status === 502 || response.status === 0) {
+          throw new Error('API is down — overflow not changed. Wait a second and try again.');
+        }
+        if (response.status === 401) {
+          // Stale localStorage token with an empty server OPERATOR_TOKEN.
+          localStorage.removeItem('agni.operatorToken');
+          throw new Error('Operator token mismatch — cleared. Hard refresh, then toggle again.');
+        }
+        throw new Error(detail.detail || `Could not change overflow (${response.status})`);
+      }
+      const body = await response.json();
+      setSettings(body);
+      setNotice(body.overflow_enabled ? 'Overflow ON — AGNI can answer' : 'Overflow OFF — dial 911');
     } catch (error) {
-      setNotice(error.message);
+      setNotice(error.message || 'Could not change overflow');
     } finally {
       setBusy(false);
     }
@@ -1220,6 +1542,19 @@ function App() {
       setNotice('Set DISPATCHER_PHONE_NUMBER in .env first — JUMP IN cannot ring a phone yet');
       return;
     }
+    // Warm transfer_to_number can drop the caller on this Twilio/ElevenLabs tier.
+    // Spec fallback is callback hand-back after a successful transfer — never silent.
+    if (!opts.force) {
+      const ok = window.confirm(
+        'JUMP IN may drop the caller on this phone plan (warm transfer). '
+        + 'Prefer Confirm/Approve while AGNI stays on the line.\n\n'
+        + 'Continue only if you will answer the dispatcher phone?',
+      );
+      if (!ok) {
+        setNotice('JUMP IN cancelled — AGNI stays on the call');
+        return;
+      }
+    }
     setBusy(true);
     try {
       const path = callId
@@ -1234,7 +1569,13 @@ function App() {
       });
       if (iid) setSelectedId(iid);
       setCallPop(null);
-      setNotice("You're live with the caller");
+      const placed = result?.transfer?.placed;
+      const reason = result?.transfer?.reason;
+      setNotice(
+        placed === false
+          ? `JUMP IN flagged — transfer not confirmed (${reason || 'check phone'}). Caller may still be on AGNI.`
+          : "JUMP IN sent — answer your dispatcher phone. If the caller drops, use Hand back (callback).",
+      );
       await refresh();
     } catch (error) {
       setNotice(error.message);
@@ -1264,13 +1605,58 @@ function App() {
 
   const signClose = async () => {
     if (!selected || busy) return;
+    if (selected.status === 'closed') {
+      setNotice('Already signed and closed');
+      return;
+    }
     setBusy(true);
+    setNotice('Signing after-action…');
+    const closedId = selected.id;
     try {
-      await request(`/api/incidents/${selected.id}/report/sign`, { actor: 'dispatcher', edits: '' });
-      setNotice('After-action signed · incident closed');
-      await refresh();
+      const result = await request(
+        `/api/incidents/${selected.id}/report/sign`,
+        { actor: 'dispatcher', edits: '' },
+        {},
+        25000,
+      );
+      // Keep the row visible locally — refresh drops closed fires from /api/state
+      setState(prev => ({
+        ...prev,
+        incidents: (prev.incidents || []).map(i => (
+          i.id === closedId
+            ? { ...i, status: 'closed', closed_at: new Date().toISOString() }
+            : i
+        )),
+      }));
+      setNotice(
+        result?.signed_by
+          ? `Signed by ${result.signed_by} · closed. Draft saved.`
+          : 'After-action signed · incident closed',
+      );
+      await refresh().catch(() => {});
+      // Re-select closed fire so the panel doesn't go blank (looks like "UI dead")
+      setSelectedId(closedId);
+      setState(prev => {
+        const still = (prev.incidents || []).some(i => i.id === closedId);
+        if (still) return prev;
+        return {
+          ...prev,
+          incidents: [
+            {
+              id: closedId,
+              status: 'closed',
+              title: selected.title || 'Closed fire',
+              why_line: selected.why_line,
+              lat: selected.lat,
+              lon: selected.lon,
+              closed_at: new Date().toISOString(),
+            },
+            ...(prev.incidents || []),
+          ],
+        };
+      });
     } catch (error) {
-      setNotice(error.message);
+      setNotice(error.message || 'Sign & close failed');
     } finally {
       setBusy(false);
     }
@@ -1286,6 +1672,12 @@ function App() {
   useEffect(() => {
     const onKey = event => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (event.key === 'Escape' && cameraOpen) {
+        event.preventDefault();
+        setCameraOpen(null);
+        return;
+      }
+      if (cameraOpen) return; // don't fire dispatch hotkeys under the lightbox
       const key = event.key.toLowerCase();
       if (event.key === 'Enter') { event.preventDefault(); primaryAction(); }
       if (key === 'c') confirmFire();
@@ -1312,7 +1704,6 @@ function App() {
     || (selected ? 1 : 0);
   // Live clock / silence detector keep ticking while a call is up.
   void tick;
-  void connection;
   void liveCount;
   void lang;
 
@@ -1471,6 +1862,42 @@ function App() {
         action: 'jump',
       };
     }
+    // Confirmed fire waiting on a unit — keep Approve available even while the call is live.
+    if (focusIncident && focusIncident.status === 'confirmed' && !focusIncident.assigned_unit) {
+      return {
+        id: 'dispatch',
+        who: 'You decide',
+        tone: 'decide',
+        title: 'Approve a unit?',
+        body: focusLive
+          ? 'Fire confirmed. AGNI can keep talking — press Approve (A) to send one engine.'
+          : 'Fire confirmed. Send one engine when the route looks right (A). You decide. AGNI only suggests.',
+        action: 'dispatch',
+      };
+    }
+    // Already dispatched — never trap the UI in "watch / confirm" (Sign & close must stay clickable).
+    if (focusIncident && (focusIncident.status === 'dispatched' || focusIncident.assigned_unit)) {
+      return {
+        id: 'warn',
+        who: 'You decide',
+        tone: 'decide',
+        title: 'Help is en route — warn the path?',
+        body: focusLive
+          ? 'Unit en route. Optional: ring (R) + warn (W). Or Sign & close (S) when done.'
+          : 'Optional. Grow the 30-min estimate ring (R), then Send (W). Or Sign & close (S).',
+        action: 'warn',
+      };
+    }
+    if (focusIncident && focusIncident.status === 'closed') {
+      return {
+        id: 'closed',
+        who: 'Done',
+        tone: 'calm',
+        title: 'Incident closed',
+        body: 'After-action signed. Clean slate for the next call, or open another fire.',
+        action: null,
+      };
+    }
     // Jobs beat: ElevenLabs just spoke the Bright Data safe path (live on the phone).
     if (pathForFocus?.say && focusLive && !climaxForFocus) {
       return {
@@ -1537,33 +1964,13 @@ function App() {
         action: 'confirm',
       };
     }
-    if (focusIncident && focusIncident.status === 'confirmed' && !focusIncident.assigned_unit) {
-      return {
-        id: 'dispatch',
-        who: 'You decide',
-        tone: 'decide',
-        title: 'Approve a unit?',
-        body: 'Fire confirmed. Send one engine when the route looks right (A). You decide. AGNI only suggests.',
-        action: 'dispatch',
-      };
-    }
-    if (focusIncident && (focusIncident.status === 'dispatched' || focusIncident.assigned_unit)) {
-      return {
-        id: 'warn',
-        who: 'You decide',
-        tone: 'decide',
-        title: 'Help is en route — warn the path?',
-        body: 'Optional. Grow the 30-min estimate ring (R), then Send to opt-in phones only (W). You decide. AGNI only suggests.',
-        action: 'warn',
-      };
-    }
     return {
       id: 'calm',
       who: 'Waiting',
       tone: 'calm',
       title: settings.overflow_enabled ? '911 is busy. AGNI is standing by.' : 'Overflow is OFF',
       body: settings.overflow_enabled
-        ? 'Public ears already listening. Dial AGNI → pin appears → you Confirm.'
+        ? 'Live area data is cached. Dial AGNI → pin appears → you Confirm.'
         : 'Turn Overflow ON first. AGNI only answers when 911 is busy.',
       action: null,
     };
@@ -1584,7 +1991,7 @@ function App() {
     }
     if (mode.id === 'dispatch' || mode.id === 'warn') return 'dispatch';
     if (mode.id === 'confirm' || mode.id === 'merge') return 'confirm';
-    if (mode.id === 'path' || (pathForFocus?.say && focusLive)) return 'path';
+    if (mode.id === 'path' || (pathForFocus?.shelter_name && focusLive)) return 'path';
     if (mode.id === 'agent' || mode.id === 'stuck' || mode.id === 'human' || focusLive) return 'call';
     if (focusIncident && (focusIncident.status === 'possible' || focusIncident.status === 'unverified')) {
       return 'confirm';
@@ -1721,40 +2128,58 @@ function App() {
           })}
         </nav>
 
-        {pathForFocus?.say ? (
-          <div className="jobs-reveal glass" role="status" aria-live="polite">
-            <div className="jobs-reveal-kicker">
-              {focusLive ? 'Caller hears this now' : 'Caller heard'}
-              <span> · Bright Data shelter · not downwind</span>
-            </div>
-            <blockquote className="jobs-reveal-quote">
-              “{pathForFocus.say}”
-            </blockquote>
-            <div className="jobs-reveal-meta">
-              {pathForFocus.shelter_name ? (
-                <span>{pathForFocus.shelter_name}</span>
-              ) : null}
-              {typeof pathForFocus.room === 'number' ? (
-                <span>Room for ~{pathForFocus.room}</span>
-              ) : null}
-              {pathForFocus.refused_name ? (
-                <span className="jobs-reveal-refused">
-                  Refused {pathForFocus.refused_name}
-                  {pathForFocus.refused_why ? ` · ${pathForFocus.refused_why}` : ''}
+        {pathForFocus?.shelter_name ? (
+          <div className="path-hud glass" role="status" aria-live="polite">
+            <div className="path-hud-line">
+              <span className="path-hud-swatch" aria-hidden="true" />
+              <div className="path-hud-copy">
+                <strong>Safe path on map</strong>
+                <span>
+                  → {pathForFocus.shelter_name}
+                  {pathForFocus.escape?.route_kind === 'estimate' || pathForFocus.escape?.label === 'estimate'
+                    ? ' · estimate'
+                    : pathForFocus.escape?.distance_m
+                      ? ` · ~${Math.round(pathForFocus.escape.distance_m)} m`
+                      : ''}
+                  {typeof pathForFocus.room === 'number' ? ` · room ~${pathForFocus.room}` : ''}
                 </span>
-              ) : null}
+                {pathForFocus.refused_name ? (
+                  <em>Not {pathForFocus.refused_name}{pathForFocus.refused_why ? ` · ${pathForFocus.refused_why}` : ''}</em>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="btn primary compact"
+                disabled={busy}
+                title="Text maps link to an opt-in phone only"
+                onClick={textSafePath}
+              >
+                Text path
+              </button>
             </div>
+            {focusLive && pathForFocus.say ? (
+              <p className="path-hud-say" title={pathForFocus.say}>
+                Caller hears · {truncate(pathForFocus.say, 96)}
+              </p>
+            ) : null}
             {climaxForFocus?.source === 'unit.dispatched' ? (
-              <p className="jobs-reveal-unit">
+              <p className="path-hud-unit">
                 {[climaxForFocus.callsign || climaxForFocus.unit_id, climaxEtaLabel]
                   .filter(Boolean)
                   .join(' · ')}
-                {' · en route to the fire'}
+                {' · unit to the fire (white line)'}
               </p>
             ) : null}
           </div>
         ) : null}
 
+        {connection === 'offline' || connection === 'reconnecting' ? (
+          <div className="banner warn">
+            {connection === 'offline'
+              ? 'Backend offline — Overflow / map / calls cannot update. Waiting for API…'
+              : 'Reconnecting to AGNI…'}
+          </div>
+        ) : null}
         {notice ? <div className="banner">{notice}</div> : null}
 
         <aside className="left-panel glass">
@@ -1772,9 +2197,11 @@ function App() {
               <button
                 type="button"
                 className="linkish slate-btn"
-                disabled={busy}
+                disabled={busy || callActive}
                 onClick={clearSlate}
-                title="Wipe fires/calls for the next judge"
+                title={callActive
+                  ? 'Blocked while a call is live — hang up first'
+                  : 'Wipe fires/calls for the next judge (not during a live call)'}
               >
                 Clean slate
               </button>
@@ -1852,8 +2279,14 @@ function App() {
                 </em>
                 {pinHonesty ? <em className="pin-src">{pinHonesty}</em> : null}
                 {selected?.lat == null ? (
-                  <em className="pin-miss">Location: not yet — no pin until landmark or GPS</em>
-                ) : null}
+                  <em className="pin-miss">Location: not yet — AGNI will not invent a path until a landmark or GPS pin</em>
+                ) : (
+                  <em className="pin-ok">
+                    Pin set
+                    {selected.location_src ? ` · ${selected.location_src}` : ''}
+                    {' · Confirm when it looks real'}
+                  </em>
+                )}
               </div>
             </div>
           ) : null}
@@ -2136,10 +2569,14 @@ function App() {
                       </p>
                     </>
                   )}
-                  {['confirmed', 'dispatched', 'closed'].includes(selected.status)
-                    && !['confirm', 'watch', 'jump', 'handback'].includes(nextStep.action || '') && (
-                    <button className="btn ghost row" disabled={busy} onClick={signClose}>
-                      <kbd>S</kbd> Sign & close
+                  {['confirmed', 'dispatched', 'closed'].includes(selected.status) && (
+                    <button
+                      className="btn ghost row"
+                      disabled={busy || selected.status === 'closed'}
+                      onClick={signClose}
+                      title={selected.status === 'closed' ? 'Already closed' : 'Sign after-action and close'}
+                    >
+                      <kbd>S</kbd> {selected.status === 'closed' ? 'Signed & closed' : 'Sign & close'}
                     </button>
                   )}
                   <div className="human-note">You decide. AGNI only suggests.</div>
@@ -2153,61 +2590,102 @@ function App() {
           </div>
         </aside>
 
-        <div className="metrics glass">
-          <div className="row">
-            <span>Signal to dispatch</span>
-            <b>{fmtClock(dispatchClock)}</b>
-          </div>
-          <div className="row">
-            <span>Units free</span>
-            <b>{unitsTotal ? `${unitsFree}/${unitsTotal}` : '—'}</b>
-          </div>
-          <div className="row">
-            <span>Residents warned</span>
-            <b>{residentsWarned == null ? (proof.sim ? '0' : '—') : residentsWarned}</b>
+        <div className="right-rail">
+          <aside className={`live-report glass ${newsPulse ? 'pulse' : ''}`} key={`report-${newsPulse}`}>
+            <div className="live-report-head">
+              <strong>Live area report</strong>
+              <span>{selected ? (areaBrief?.label || 'Area brief · CCTV + news') : 'Standby'}</span>
+            </div>
+
+            {!selected ? (
+              <p className="live-report-wait">
+                Pick a fire on the left.
+                <br />
+                CCTV + nearby news brief for this pin.
+              </p>
+            ) : areaBriefStatus === 'loading' ? (
+              <p className="live-report-wait">Writing area brief…</p>
+            ) : (
+              <>
+                {(() => {
+                  const vKey = areaBrief?.verdict
+                    || areaBrief?.cctv_verdict
+                    || 'no_fire';
+                  const cls = areaBrief?.badge_cls
+                    || ({
+                      fire_visible: 'fire',
+                      fire: 'fire',
+                      fire_risk: 'fire',
+                      cant_tell: 'maybe',
+                      no_fire: 'clear',
+                      no_cameras: 'clear',
+                    }[vKey] || 'clear');
+                  const badgeText = areaBrief?.verdict_text
+                    || areaBrief?.cctv_line
+                    || 'CCTV: NO FIRE VISIBLE';
+                  const refs = (areaBrief?.references || areaBrief?.news || []).slice(0, 5);
+                  return (
+                    <>
+                      <div className={`live-report-badge ${cls}`} role="status">
+                        {badgeText}
+                      </div>
+                      <div className="live-report-body">
+                        <p>
+                          {areaBrief?.body_cctv
+                            || 'Based on CCTV stills, there appears to be no fire in view.'}
+                        </p>
+                        <p>
+                          {areaBrief?.body_news
+                            || 'Nearby news and crowd posts look neutral for now.'}
+                        </p>
+                        <p className="live-report-other">
+                          {areaBrief?.body_other
+                            || 'Wind / satellite / perimeter summarized from cached evidence only.'}
+                        </p>
+                      </div>
+                      <div className="live-report-refs">
+                        <p className="live-report-mentions-label">
+                          References · cached crowd / news · not proof
+                        </p>
+                        <ul>
+                          {(refs.length ? refs : newsItems.slice(0, 4)).map(item => (
+                            <li key={item.id || item.text || item.place_text}>
+                              <span className="live-report-src">
+                                {item.source || 'Cached'}
+                              </span>
+                              <span className="live-report-age">
+                                {item.age_label || 'cached'}
+                              </span>
+                              <span className="live-report-ref-text">
+                                {truncate(item.text || item.place_text, 110)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </>
+                  );
+                })()}
+                <p className="live-report-foot">
+                  Area brief · CCTV + news · suggest only · you Confirm
+                </p>
+              </>
+            )}
+          </aside>
+
+          <div className="metrics glass compact">
+            <div className="row">
+              <span>Signal → dispatch</span>
+              <b>{fmtClock(dispatchClock)}</b>
+            </div>
+            <div className="row">
+              <span>Units free</span>
+              <b>{unitsTotal ? `${unitsFree}/${unitsTotal}` : '—'}</b>
+            </div>
           </div>
         </div>
 
-        <aside className={`news-box glass ${newsPulse ? 'pulse' : ''} ${callActive ? 'dimmed' : ''}`} key={`news-${newsPulse}`}>
-          <div className="news-head">
-            <strong>Public ears (Bright Data)</strong>
-            <span className={newsStale ? 'stale' : ''}>
-              {newsItems.length
-                ? `${newsItems.length} · ${ageLabel(newsItems[0]?.scraped) || 'cache'}`
-                : 'empty'}
-            </span>
-          </div>
-          <p className="news-sub">
-            Residents mentioned smoke earlier · raises priority only · never dispatches
-          </p>
-          {selected?.first_mention?.lead_label ? (
-            <p className="news-lead">{selected.first_mention.lead_label}</p>
-          ) : null}
-          {newsItems.length ? (
-            <ul className="news-list">
-              {newsItems.slice(0, callActive ? 3 : 5).map(item => (
-                <li key={item.id || item.signal_id || item.url || item.text}>
-                  <span className={`src ${String(item.source || 'serp').toLowerCase()}`}>
-                    {String(item.source || 'serp').toUpperCase()}
-                  </span>
-                  <span className="age">{ageLabel(item.scraped) || '—'}</span>
-                  {item.url ? (
-                    <a href={item.url} target="_blank" rel="noreferrer" title={item.text}>
-                      {truncate(item.text || item.place_text, 88)}
-                    </a>
-                  ) : (
-                    <span title={item.text}>{truncate(item.text || item.place_text, 88)}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="news-empty">No cached public mentions yet — waiting for Bright Data cache.</p>
-          )}
-          <p className="news-foot">Cached ahead of calls · never runs during a live call</p>
-        </aside>
-
-        {selected?.status === 'confirmed' && routeUnit && !selected.assigned_unit && (
+        {selected?.status === 'confirmed' && !selected.assigned_unit && (
           <div className="route-card glass">
             <div className="route-card-head">
               <strong>Get them out of danger</strong>
@@ -2215,15 +2693,29 @@ function App() {
             </div>
             {route?.shelter?.name ? (
               <p className="escape-line">
-                Caller path · AGNI will say: go toward <b>{route.shelter.name}</b>
+                Green line on map · caller → <b>{route.shelter.name}</b>
+                {route.escape?.route_kind === 'estimate' ? ' · estimate' : ''}
                 {route.refused?.[0]
                   ? ` · not ${route.refused[0].name || route.refused[0].why}`
                   : ' · not downwind'}
               </p>
             ) : (
-              <p className="escape-line">Caller path · stay safe until a shelter route is ready</p>
+              <p className="escape-line">
+                {routeUnit ? 'Caller path · stay safe until a shelter route is ready' : 'Loading nearest unit…'}
+              </p>
             )}
-            <h3>{routeLabel}</h3>
+            {route?.shelter?.name ? (
+              <button
+                type="button"
+                className="btn ghost row"
+                disabled={busy}
+                onClick={textSafePath}
+                style={{ marginTop: 8 }}
+              >
+                Text safe path (opt-in only)
+              </button>
+            ) : null}
+            <h3>{routeLabel || 'Finding nearest available unit…'}</h3>
             {(route?.brightdata_chips || []).length ? (
               <div className="route-bd-chips">
                 {(route.brightdata_chips || []).map(chip => (
@@ -2258,55 +2750,121 @@ function App() {
             {route?.route_kind === 'estimate' || routeUnit?.route_kind === 'estimate' ? (
               <p>Straight-line estimate · road route unavailable</p>
             ) : null}
-            <button className="btn primary" disabled={busy} onClick={approveDispatch}>
-              Approve dispatch ↑
+            <button
+              className="btn primary"
+              disabled={busy || !routeUnit}
+              title={!routeUnit ? 'Waiting for nearest unit…' : 'Approve dispatch'}
+              onClick={approveDispatch}
+            >
+              {routeUnit ? 'Approve dispatch ↑' : 'Loading unit…'}
             </button>
             <p className="consequence route-consequence">You decide. AGNI only suggests. One unit.</p>
-            <button className="alt" type="button" onClick={loadRoute}>Choose another unit</button>
+            <button className="alt" type="button" disabled={busy} onClick={loadRoute}>
+              {routeUnit ? 'Choose another unit' : 'Retry route'}
+            </button>
           </div>
         )}
 
         <div className={`camera-strip ${callActive ? 'live-call' : ''}`}>
           <div className="camera-strip-head">
-            <strong>Nearby cameras</strong>
-            <span>Confirm the caller&apos;s report (ALERTCalifornia does discovery; we don&apos;t)</span>
+            <strong>CCTV · ALERTCalifornia</strong>
+            <span>
+              {cameraReason
+                || 'Latest stills · confirm the caller report · click to enlarge'}
+            </span>
           </div>
           {cameraStatus === 'idle' || !cameraItems.length ? (
             <div className="camera-idle glass">
-              {selected?.lat != null && selected?.lon != null
-                ? (cameraReason || 'Loading nearby cameras…')
-                : 'Appear after a location pin'}
+              {cameraReason || 'Loading latest CCTV stills…'}
             </div>
           ) : (
             <div className="camera-tiles">
-              {cameraItems.map((cam, index) => (
-                <article className="cam-tile" key={cam.id || index}>
-                  {cam.image ? (
-                    <>
-                      <img src={cam.image} alt={cam.name || 'Camera still'} />
-                      <span className={`tag ${(cam.frame_source === 'replay' || isReplay) ? 'replay' : ''}`}>
-                        {(cam.frame_source === 'replay' || isReplay) ? 'REPLAY' : 'LIVE'}
-                      </span>
-                    </>
-                  ) : (
-                    <div className="ph">
-                      {cam.loading ? 'Loading still…' : (cam.reason || 'No frame')}
-                      <br />
-                      <span style={{ color: 'var(--dim)' }}>never means safe</span>
+              {cameraItems.map((cam, index) => {
+                const tag = (cam.frame_source === 'replay' || isReplay)
+                  ? 'REPLAY'
+                  : (cam.fallback ? 'LATEST' : 'LIVE');
+                const openable = Boolean(cam.image);
+                return (
+                  <button
+                    type="button"
+                    className={`cam-tile ${openable ? 'openable' : ''}`}
+                    key={cam.id || index}
+                    disabled={!openable}
+                    title={openable ? 'Open camera still' : undefined}
+                    onClick={() => {
+                      if (!openable) return;
+                      setCameraOpen({
+                        id: cam.id || index,
+                        name: cam.name || `Cam ${index + 1}`,
+                        image: cam.image,
+                        tag,
+                        km: cam.km,
+                        site: cam.site,
+                        online: cam.online,
+                      });
+                    }}
+                  >
+                    {cam.image ? (
+                      <>
+                        <img src={cam.image} alt={cam.name || 'Camera still'} />
+                        <span className={`tag ${tag === 'REPLAY' ? 'replay' : ''}`}>{tag}</span>
+                      </>
+                    ) : (
+                      <div className="ph">
+                        {cam.loading ? 'Loading still…' : (cam.reason || 'No frame')}
+                        <br />
+                        <span style={{ color: 'var(--dim)' }}>never means safe</span>
+                      </div>
+                    )}
+                    <div className="cap">
+                      <span>{cam.name || `Cam ${index + 1}`}</span>
+                      <small>
+                        {cam.km != null ? `${cam.km} km` : cam.site || 'ALERTCalifornia'}
+                        {cam.online ? ` · ${cam.online}` : ''}
+                        {cam.fallback ? ' · latest available' : ''}
+                        {openable ? ' · click to open' : ''}
+                      </small>
                     </div>
-                  )}
-                  <div className="cap">
-                    <span>{cam.name || `Cam ${index + 1}`}</span>
-                    <small>
-                      {cam.km != null ? `${cam.km} km` : cam.site || 'ALERTCalifornia'}
-                      {cam.online ? ` · ${cam.online}` : ''}
-                    </small>
-                  </div>
-                </article>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
+
+        {cameraOpen ? (
+          <div
+            className="cam-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={cameraOpen.name || 'Camera still'}
+            onClick={() => setCameraOpen(null)}
+          >
+            <div
+              className="cam-lightbox-panel"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="cam-lightbox-head">
+                <div>
+                  <strong>{cameraOpen.name}</strong>
+                  <span>
+                    {cameraOpen.km != null ? `${cameraOpen.km} km` : cameraOpen.site || 'ALERTCalifornia'}
+                    {cameraOpen.online ? ` · ${cameraOpen.online}` : ''}
+                    {' · '}
+                    {cameraOpen.tag}
+                  </span>
+                </div>
+                <button type="button" className="cam-lightbox-close" onClick={() => setCameraOpen(null)}>
+                  Close · Esc
+                </button>
+              </div>
+              <img src={cameraOpen.image} alt={cameraOpen.name || 'Camera still'} />
+              <p className="cam-lightbox-note">
+                Cameras confirm caller reports. Empty / clear stills never mean safe.
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         <div className="footer-keys">
           {nextStep.action === 'confirm' && '↵ Confirm fire'}

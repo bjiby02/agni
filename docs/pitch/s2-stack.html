@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    font-family: 'DM Sans', Arial, sans-serif;
+    color: #F5F1EB;
+    background:
+      radial-gradient(ellipse 45% 50% at 18% 45%, rgba(11,107,203,0.18), transparent 60%),
+      radial-gradient(ellipse 40% 45% at 50% 40%, rgba(66,133,244,0.16), transparent 55%),
+      radial-gradient(ellipse 45% 50% at 82% 45%, rgba(255,107,53,0.20), transparent 60%),
+      linear-gradient(165deg, #080A0E 0%, #10141C 50%, #0C1016 100%);
+  }
+  .wrap { padding: 48px 72px 40px; height: 100%; display: flex; flex-direction: column; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 36px; }
+  .eyebrow { color: #FF6B35; font-size: 15px; font-weight: 700; letter-spacing: 0.3em; }
+  .title { font-size: 46px; font-weight: 800; margin-top: 8px; letter-spacing: -0.02em; }
+  .sub { color: #9AA4B2; font-size: 18px; text-align: right; line-height: 1.4; max-width: 420px; }
+
+  .pipeline {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 56px 1fr 56px 1fr;
+    gap: 0;
+    align-items: stretch;
+    min-height: 0;
+  }
+
+  .col {
+    border-radius: 28px;
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 28px 26px 24px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .col::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent 40%);
+    pointer-events: none;
+  }
+  .col.data { background: linear-gradient(180deg, #0F1A28 0%, #0C121A 100%); }
+  .col.brain { background: linear-gradient(180deg, #101828 0%, #0C121A 100%); }
+  .col.action { background: linear-gradient(180deg, #1A120E 0%, #120E0C 100%); }
+
+  .layer-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .layer-tag .pip { width: 10px; height: 10px; border-radius: 50%; }
+  .data .layer-tag { color: #5BA3F0; }
+  .brain .layer-tag { color: #8AB4F8; }
+  .action .layer-tag { color: #FF8A5B; }
+
+  .layer-title { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .layer-desc { color: #9AA4B2; font-size: 17px; line-height: 1.4; margin-bottom: 22px; }
+
+  .cards { display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .card {
+    background: rgba(0,0,0,0.28);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    padding: 16px 18px;
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 14px;
+    align-items: center;
+  }
+  .mark {
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: #161B22;
+    overflow: hidden;
+  }
+  .mark img { width: 36px; height: 36px; object-fit: contain; }
+  .mark.word {
+    font-weight: 800; font-size: 18px; color: #F5F1EB;
+    letter-spacing: -0.02em;
+  }
+  .cname { font-size: 20px; font-weight: 700; }
+  .crole { color: #A8B0BD; font-size: 15px; margin-top: 4px; line-height: 1.3; }
+
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .arrow-col svg { width: 44px; height: 28px; }
+  .arrow-col span {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    font-weight: 700;
+    color: #6B7380;
+    text-transform: uppercase;
+  }
+
+  .footer {
+    margin-top: 28px;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 20px;
+    align-items: stretch;
+  }
+  .human {
+    background: rgba(233,196,106,0.08);
+    border: 1px solid rgba(233,196,106,0.35);
+    border-radius: 18px;
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .human .badge {
+    background: #E9C46A;
+    color: #0A0C10;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    padding: 8px 12px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .human p { font-size: 18px; color: #E8ECF2; line-height: 1.35; }
+  .human strong { color: #E9C46A; }
+
+  .also {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 18px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .also .label {
+    color: #6B7380;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .also-row { display: flex; gap: 10px; flex: 1; }
+  .chip {
+    flex: 1;
+    background: rgba(0,0,0,0.25);
+    border-radius: 12px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .chip img { width: 22px; height: 22px; object-fit: contain; }
+  .chip div { min-width: 0; }
+  .chip .n { font-size: 14px; font-weight: 700; }
+  .chip .r { font-size: 12px; color: #9AA4B2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <div class="eyebrow">ONE PICTURE</div>
+        <div class="title">Data → Brain → Action</div>
+      </div>
+      <div class="sub">Sponsors mapped to what AGNI actually does.<br/>Everything still waits on a human.</div>
+    </div>
+
+    <div class="pipeline">
+      <!-- DATA -->
+      <div class="col data">
+        <div class="layer-tag"><span class="pip" style="background:#5BA3F0"></span> Data</div>
+        <div class="layer-title">What the world sees</div>
+        <div class="layer-desc">Crowd posts, cameras, and satellites — cached ahead, never during a live call.</div>
+        <div class="cards">
+          <div class="card">
+            <div class="mark"><img src="assets/logo-brightdata-lg.png" alt=""/></div>
+            <div>
+              <div class="cname">Bright Data</div>
+              <div class="crole">Crowd signals · closures · landmarks from the open web</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark"><img src="assets/logo-cctv.png" alt=""/></div>
+            <div>
+              <div class="cname">CCTV · ALERTCalifornia</div>
+              <div class="crole">Nearest cameras confirm caller reports — they don’t discover fires</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark"><img src="assets/logo-nasa-lg.png" alt=""/></div>
+            <div>
+              <div class="cname">NASA FIRMS</div>
+              <div class="crole">Satellite heat. Honest if empty — can lag hours</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow-col">
+        <svg viewBox="0 0 44 28" fill="none"><path d="M2 14h34M28 5l12 9-12 9" stroke="#5BA3F0" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>feeds</span>
+      </div>
+
+      <!-- BRAIN -->
+      <div class="col brain">
+        <div class="layer-tag"><span class="pip" style="background:#8AB4F8"></span> Brain</div>
+        <div class="layer-title">What AGNI understands</div>
+        <div class="layer-desc">Gemini turns raw signals into landmarks, smoke checks, and handoff summaries.</div>
+        <div class="cards">
+          <div class="card">
+            <div class="mark"><img src="assets/logo-google-lg.png" alt=""/></div>
+            <div>
+              <div class="cname">Gemini</div>
+              <div class="crole">Landmark extract · camera triage · same-fire check · handoff summary</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark word" style="background:#0B3D2E;color:#00E599">N</div>
+            <div>
+              <div class="cname">Neon</div>
+              <div class="crole">Incident memory + audit log — every decision stored</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark word" style="background:#1A222D;color:#E9C46A">∵</div>
+            <div>
+              <div class="cname">Evidence stack</div>
+              <div class="crole">One “why this pin” line for the dispatcher</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow-col">
+        <svg viewBox="0 0 44 28" fill="none"><path d="M2 14h34M28 5l12 9-12 9" stroke="#FF6B35" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>speaks</span>
+      </div>
+
+      <!-- ACTION -->
+      <div class="col action">
+        <div class="layer-tag"><span class="pip" style="background:#FF8A5B"></span> Action agent</div>
+        <div class="layer-title">What the caller hears</div>
+        <div class="layer-desc">ElevenLabs is the voice on the line — intake, guidance, JUMP IN, warning calls.</div>
+        <div class="cards">
+          <div class="card">
+            <div class="mark word" style="background:#111;color:#fff;font-size:22px">11</div>
+            <div>
+              <div class="cname">ElevenLabs</div>
+              <div class="crole">The action agent — answers overflow, guides, warns, Press 1</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark"><img src="assets/logo-twilio-lg.png" alt=""/></div>
+            <div>
+              <div class="cname">Twilio</div>
+              <div class="crole">The phone number into ElevenLabs</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="mark"><img src="assets/logo-ors-lg.png" alt=""/></div>
+            <div>
+              <div class="cname">OpenRouteService</div>
+              <div class="crole">Safe route around closures — spoken only from a real route</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="human">
+        <div class="badge">HUMAN GATE</div>
+        <p>Confirm fire · Approve dispatch · Send warning — <strong>AI never does these alone</strong></p>
+      </div>
+      <div class="also">
+        <div class="label">Rule</div>
+        <div style="font-size:16px;color:#D0D5DD;line-height:1.35">Bright Data never runs during a live call. Gemini never invents coordinates. Overflow only.</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

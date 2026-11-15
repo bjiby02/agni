@@ -13,6 +13,8 @@ EVENT_TYPES = {
     "ops.reset",
     # Spoken safe-path from Bright Data shelters (Jobs reveal for judges).
     "guidance.ready",
+    # Human-approved SMS of maps link to nearest safe shelter (opt-in only).
+    "escape.sms",
 }
 
 

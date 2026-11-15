@@ -47,3 +47,5 @@ def request_json(
         except Exception:
             parsed = {"raw": payload.decode("utf-8", errors="replace")}
         return error.code, parsed
+    except (TimeoutError, urllib.error.URLError, OSError) as error:
+        return 599, {"error": type(error).__name__, "detail": str(error)[:240]}

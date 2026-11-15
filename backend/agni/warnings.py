@@ -23,11 +23,26 @@ def opted_in_contacts() -> list[dict[str, Any]]:
             continue
         if not isinstance(item.get("phone"), str) or not item["phone"].strip():
             continue
+        row = {**item, "phone": item["phone"].strip()}
         try:
-            contacts.append({**item, "lat": float(item["lat"]), "lon": float(item["lon"])})
+            row["lat"] = float(item["lat"])
+            row["lon"] = float(item["lon"])
         except (KeyError, TypeError, ValueError):
-            continue
+            # SMS-only opt-ins may omit coordinates.
+            row["lat"] = None
+            row["lon"] = None
+        contacts.append(row)
     return contacts
+
+
+def phone_opted_in(phone: str | None) -> bool:
+    """True only when the exact E.164 number is on the opt-in warn list."""
+    if not phone or not isinstance(phone, str):
+        return False
+    want = phone.strip()
+    if not want.startswith("+"):
+        return False
+    return any(c.get("phone") == want for c in opted_in_contacts())
 
 
 def _inside(point_lon: float, point_lat: float, polygon: list[list[float]]) -> bool:

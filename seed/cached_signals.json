@@ -70,5 +70,29 @@
     "lat": 32.85,
     "lon": -117.26,
     "posted_minutes_ago": 9
+  },
+  {
+    "id": "cache_reddit_atkinson",
+    "source": "reddit",
+    "url": "https://www.reddit.com/r/UCSD/comments/demo_atkinson_smoke/",
+    "text": "r/UCSD: smoke smell near Atkinson / Jacobs. Anyone know what's burning?",
+    "about_fire": true,
+    "place_text": "Atkinson Hall",
+    "confidence": "medium",
+    "lat": 32.8815,
+    "lon": -117.2347,
+    "posted_minutes_ago": 7
+  },
+  {
+    "id": "cache_x_jacobs",
+    "source": "x",
+    "url": "https://x.com/demo/status/agni_jacobs_plume",
+    "text": "Hazy plume visible from Jacobs / Warren side of campus. Unverified.",
+    "about_fire": true,
+    "place_text": "Jacobs Hall UCSD",
+    "confidence": "low",
+    "lat": 32.8818,
+    "lon": -117.2355,
+    "posted_minutes_ago": 11
   }
 ]

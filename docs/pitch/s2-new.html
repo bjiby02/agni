@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    font-family: 'DM Sans', Arial, sans-serif;
+    background:
+      radial-gradient(ellipse 50% 40% at 50% 0%, rgba(255,107,53,0.20), transparent 60%),
+      radial-gradient(ellipse 40% 35% at 90% 80%, rgba(42,157,143,0.10), transparent 55%),
+      linear-gradient(160deg, #090B10 0%, #12161E 55%, #0E1218 100%);
+    color: #F5F1EB;
+  }
+  .wrap { padding: 56px 80px 40px; height: 100%; display: flex; flex-direction: column; }
+
+  .top { display: flex; justify-content: space-between; align-items: flex-end; }
+  .eyebrow { color: #FF6B35; font-size: 16px; font-weight: 700; letter-spacing: 0.32em; }
+  .title { font-size: 48px; font-weight: 700; margin-top: 10px; letter-spacing: -0.02em; }
+  .tagline { color: #9AA4B2; font-size: 20px; max-width: 520px; text-align: right; line-height: 1.45; padding-bottom: 6px; }
+
+  .journey {
+    margin-top: 54px;
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 48px 1fr 48px 1fr 48px 1fr;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .step {
+    background: rgba(18,22,30,0.85);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 28px;
+    padding: 36px 28px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    position: relative;
+  }
+  .step::before {
+    content: attr(data-n);
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #0A0C10;
+    font-weight: 800;
+    font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 40px;
+  }
+  .icon {
+    width: 96px; height: 96px;
+    margin: 18px 0 22px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.03);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .icon img { width: 72px; height: 72px; }
+  .step h3 {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 12px;
+    letter-spacing: -0.01em;
+  }
+  .step p {
+    color: #A8B0BD;
+    font-size: 18px;
+    line-height: 1.45;
+    max-width: 280px;
+  }
+  .step .who {
+    margin-top: auto;
+    padding-top: 22px;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .connector svg { width: 40px; height: 24px; opacity: 0.85; }
+
+  .rule {
+    margin-top: 36px;
+    text-align: center;
+    color: #D0D5DD;
+    font-size: 20px;
+  }
+  .rule strong { color: #E9C46A; font-weight: 700; }
+
+  .sponsors {
+    margin-top: 28px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 22px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .sponsors .label {
+    color: #6B7380;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .sponsor-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 12px;
+    flex: 1;
+    justify-content: space-between;
+  }
+  .sponsor {
+    flex: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 999px;
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    color: #E8ECF2;
+    letter-spacing: 0.01em;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="eyebrow">HOW AGNI WORKS</div>
+        <div class="title">One call. One picture. One decision.</div>
+      </div>
+      <div class="tagline">Overflow only — when 911 is flooded.<br/>AI suggests. A human always decides.</div>
+    </div>
+
+    <div class="journey">
+      <div class="step" data-n="1" style="--accent:#FF6B35">
+        <div class="icon"><img src="assets/icon-phone.png" alt=""/></div>
+        <h3>Call comes in</h3>
+        <p>911 is busy. AGNI answers in under a second — any language, any phone.</p>
+        <div class="who">Caller</div>
+      </div>
+      <div class="connector">
+        <svg viewBox="0 0 40 24" fill="none"><path d="M2 12h30M26 5l10 7-10 7" stroke="#FF6B35" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step" data-n="2" style="--accent:#E9C46A">
+        <div class="icon"><img src="assets/icon-pin.png" alt=""/></div>
+        <h3>Find the fire</h3>
+        <p>Landmarks + bearings fuse into one pin — not a guessed address.</p>
+        <div class="who">Map</div>
+      </div>
+      <div class="connector">
+        <svg viewBox="0 0 40 24" fill="none"><path d="M2 12h30M26 5l10 7-10 7" stroke="#E9C46A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step" data-n="3" style="--accent:#2A9D8F">
+        <div class="icon"><img src="assets/icon-human.png" alt=""/></div>
+        <h3>Human confirms</h3>
+        <p>Dispatcher sees one row per fire. Confirm. Approve. JUMP IN.</p>
+        <div class="who">Dispatcher</div>
+      </div>
+      <div class="connector">
+        <svg viewBox="0 0 40 24" fill="none"><path d="M2 12h30M26 5l10 7-10 7" stroke="#2A9D8F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="step" data-n="4" style="--accent:#E76F51">
+        <div class="icon"><img src="assets/icon-warn.png" alt=""/></div>
+        <h3>Warn the path</h3>
+        <p>Targeted call downwind. Press 1 if you need help getting out.</p>
+        <div class="who">Resident</div>
+      </div>
+    </div>
+
+    <div class="rule">Nothing turns red, dispatches, or warns without a <strong>human key press</strong>.</div>
+
+    <div class="sponsors">
+      <div class="label">Powered by</div>
+      <div class="sponsor-row">
+        <div class="sponsor">ElevenLabs</div>
+        <div class="sponsor">Gemini</div>
+        <div class="sponsor">Bright Data</div>
+        <div class="sponsor">Neon</div>
+        <div class="sponsor">Twilio</div>
+        <div class="sponsor">NASA FIRMS</div>
+        <div class="sponsor">OpenRouteService</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

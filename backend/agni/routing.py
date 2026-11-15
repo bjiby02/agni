@@ -90,8 +90,12 @@ def configured_refuges() -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+# Never tell a caller to walk to a shelter that is basically the fire pin.
+MIN_ESCAPE_M = 800.0
+
+
 def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] | None, wind_to_deg: float | None) -> dict[str, Any]:
-    """Use geo.py to screen configured refuges; expose every downwind refusal."""
+    """Use geo.py to screen configured refuges; expose every downwind / too-close refusal."""
     from . import brightdata_story
 
     shelters = configured_refuges() if shelters is None else shelters
@@ -104,12 +108,26 @@ def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] |
             continue
         meters = geo.haversine_m(origin[0], origin[1], lat, lon)
         bearing = geo.bearing_deg(origin[0], origin[1], lat, lon)
-        place = geo.Place(str(shelter.get("name") or "Unnamed refuge"), "R", lat, lon, meters, bearing)
+        name = str(shelter.get("name") or "Unnamed refuge")
+        if meters < MIN_ESCAPE_M:
+            refused.append({
+                "name": name,
+                "reason": f"too close to the reported fire (~{int(meters)} m)",
+            })
+            continue
+        place = geo.Place(name, "R", lat, lon, meters, bearing)
         places.append(place)
         if wind_to_deg is not None and geo.angle_diff(bearing, wind_to_deg) < geo.DRIFT_ARC:
             refused.append({"name": place.name, "reason": "downwind of the estimate"})
     selected = geo.choose(origin, places, None, need="fire", drift=wind_to_deg)
     if selected is None:
+        return {"shelter": None, "refused": refused}
+    # Belt-and-suspenders: never return a too-close pick even if geo.choose ignored the filter.
+    if float(selected.meters or 0) < MIN_ESCAPE_M:
+        refused.append({
+            "name": selected.name,
+            "reason": f"too close to the reported fire (~{int(selected.meters)} m)",
+        })
         return {"shelter": None, "refused": refused}
     payload = {
         "name": selected.name, "lat": selected.lat, "lon": selected.lon,
@@ -126,3 +144,60 @@ def choose_shelter(origin: tuple[float, float], shelters: list[dict[str, Any]] |
             "capacity_label": "Shelter capacity from Bright Data",
         })
     return {"shelter": payload, "refused": refused}
+
+
+def escape_path(
+    origin: tuple[float, float],
+    shelter: dict[str, Any] | None,
+    closures: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Caller → nearest safe shelter. Prefer road geometry; else straight-line estimate."""
+    if not shelter or shelter.get("lat") is None or shelter.get("lon") is None:
+        return None
+    try:
+        dest = (float(shelter["lat"]), float(shelter["lon"]))
+    except (TypeError, ValueError):
+        return None
+    from .services import ors
+
+    live = ors.route_unit(origin, dest, closures or [])
+    geometry = live.get("geometry")
+    if not geometry:
+        # Straight dashed estimate so the console always has something to draw.
+        geometry = {
+            "type": "LineString",
+            "coordinates": [
+                [float(origin[1]), float(origin[0])],
+                [float(dest[1]), float(dest[0])],
+            ],
+        }
+        kind = "estimate"
+        note = "Straight-line escape estimate · not a road guarantee"
+        distance_m = round(geo.haversine_m(origin[0], origin[1], dest[0], dest[1]))
+        eta_s = round(distance_m / 1000 / 5 * 3600)  # ~walking pace for the caller
+    else:
+        kind = live.get("route_kind") or "road"
+        note = live.get("note") or "Road path to shelter"
+        distance_m = live.get("distance_m")
+        eta_s = live.get("eta_s")
+    maps_url = (
+        f"https://www.google.com/maps/dir/?api=1&destination={dest[0]},{dest[1]}"
+        f"&travelmode=driving"
+    )
+    return {
+        "geojson": geometry,
+        "route_kind": kind,
+        "label": "estimate" if kind == "estimate" else "road",
+        "distance_m": distance_m,
+        "eta_s": eta_s,
+        "note": note,
+        "shelter": {
+            "name": shelter.get("name"),
+            "lat": dest[0],
+            "lon": dest[1],
+            "room": shelter.get("room"),
+            "capacity_label": shelter.get("capacity_label"),
+            "status": shelter.get("status"),
+        },
+        "maps_url": maps_url,
+    }

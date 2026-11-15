@@ -1,0 +1,103 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"/><style>@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#000;font-family:'DM Sans',Arial,sans-serif;width:1920px;height:1080px;overflow:hidden}
+  <style>
+  500;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #000; font-family: 'DM Sans', Arial, sans-serif; }
+   .slide{
+    width: 1920px; height: 1080px; position: relative; overflow: hidden;
+    margin:0;
+  }
+  .s1 {
+    background:
+      radial-gradient(ellipse 60% 50% at 72% 18%, rgba(255,107,53,0.32), transparent 70%),
+      radial-gradient(ellipse 48% 45% at 12% 88%, rgba(232,93,4,0.22), transparent 70%),
+      linear-gradient(135deg, #0A0C10 0%, #12161E 50%, #1A120E 100%);
+  }
+  .watermark {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: 'Bebas Neue', Impact, sans-serif; font-size: 520px; letter-spacing: 0.02em;
+    color: rgba(255,107,53,0.14); pointer-events: none; line-height: 0.85; user-select: none;
+  }
+  .content { position: relative; z-index: 2; padding: 48px 72px; height: 100%; }
+  .eyebrow { color: #FF6B35; font-size: 18px; font-weight: 700; letter-spacing: 0.28em; }
+  .title { color: #F5F1EB; font-size: 42px; font-weight: 700; margin-top: 10px; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin-top: 48px; }
+  .card {
+    background: rgba(15,19,25,0.72); border-radius: 20px; padding: 36px 22px 28px;
+    text-align: center; border: 1px solid rgba(255,255,255,0.05);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+  }
+  .num { font-family: 'Bebas Neue', Impact, sans-serif; font-size: 92px; color: #FF6B35; line-height: 1; }
+  .label { color: #F5F1EB; font-size: 18px; font-weight: 700; letter-spacing: 0.08em; margin-top: 18px; text-transform: uppercase; }
+  .sub { color: #D0D5DD; font-size: 18px; margin-top: 12px; line-height: 1.35; }
+  .src { color: #9AA4B2; font-size: 14px; font-style: italic; margin-top: 22px; }
+  .strip {
+    margin-top: 36px; background: rgba(15,19,25,0.7); border-radius: 18px;
+    padding: 36px 40px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+  .pn { color: #F5F1EB; font-size: 30px; font-weight: 700; }
+  .pn.gold { color: #E9C46A; }
+  .pt { color: #9AA4B2; font-size: 16px; margin-top: 10px; line-height: 1.4; white-space: pre-line; }
+
+  .s2 {
+    background:
+      radial-gradient(ellipse 55% 45% at 80% 10%, rgba(255,107,53,0.18), transparent 65%),
+      linear-gradient(135deg, #0B0E13, #141820);
+  }
+  .logos {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; margin-top: 36px;
+  }
+  .logos.row2 { grid-template-columns: repeat(3, 1fr); max-width: 72%; margin: 22px auto 0; }
+  .logo {
+    background: #161B22; border: 1px solid #2A3340; border-radius: 16px;
+    padding: 22px 20px 14px; text-align: left; display: flex; align-items: center; gap: 16px;
+  }
+  .dot { width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0; }
+  .lname { color: #F5F1EB; font-size: 22px; font-weight: 700; }
+  .lrole { color: #9AA4B2; font-size: 14px; margin-top: 4px; }
+  .flow {
+    margin-top: 34px; background: #0F141B; border: 1px solid #2A3340; border-radius: 22px;
+    padding: 28px 32px 32px;
+  }
+  .flow-h { color: #9AA4B2; font-size: 16px; letter-spacing: 0.22em; font-weight: 500; margin-bottom: 22px; }
+  .steps { display: flex; align-items: stretch; gap: 12px; }
+  .step {
+    flex: 1; background: #1A222D; border-radius: 14px; padding: 18px 14px 16px;
+    border-top: 5px solid var(--c);
+  }
+  .st { color: #F5F1EB; font-size: 16px; font-weight: 700; }
+  .ss { color: #9AA4B2; font-size: 14px; margin-top: 8px; }
+  .arrow { color: #FF6B35; font-size: 28px; align-self: center; opacity: 0.75; }
+  .people { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 22px; }
+  .person { background: #121820; border-radius: 14px; padding: 22px 24px; }
+  .ph { color: #FF6B35; font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+  .pb { color: #D0D5DD; font-size: 16px; line-height: 1.45; }
+</style>
+  </style></head><body><div class="slide s1" id="s1">
+    <div class="watermark">AGNI</div>
+    <div class="content">
+      <div class="eyebrow">WHEN SURGE HITS CALIFORNIA</div>
+      <div class="title">The return of every unanswered call</div>
+      <div class="cards">
+        <div class="card"><div class="num">~25M</div><div class="label">911 calls / year</div><div class="sub">California statewide volume</div><div class="src">Cal OES 2025</div></div>
+        <div class="card"><div class="num">10×</div><div class="label">surge multiplier</div><div class="sub">Catastrophic wildfire vs normal</div><div class="src">Camp Fire research</div></div>
+        <div class="card"><div class="num">≤10s</div><div class="label">calm wait target</div><div class="sub">Answer standard in busy hour</div><div class="src">CA 9-1-1 Ops Manual</div></div>
+        <div class="card"><div class="num">BUSY</div><div class="label">surge wait reality</div><div class="sub">Lines saturate · holds · drops</div><div class="src">Eaton · Camp Fire</div></div>
+      </div>
+      <div class="strip">
+        <div><div class="pn">1,400+</div><div class="pt">fire-related calls in Pasadena
+on Eaton Fire night one</div></div>
+        <div><div class="pn">2,800</div><div class="pt">calls logged by midnight
+Camp Fire · Butte County</div></div>
+        <div><div class="pn">14 → 8 hrs</div><div class="pt">west Altadena fire reports
+before first evacuation order</div></div>
+        <div><div class="pn gold">AGNI</div><div class="pt">catches the overflow
+911 never reaches</div></div>
+      </div>
+    </div>
+  </div>
+
+  </body></html>

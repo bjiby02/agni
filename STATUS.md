@@ -18,7 +18,7 @@
 | T11 Wind spread ring | DONE | Offline model tests pass. |
 | T12 Targeted warning and rescue | LIVE-UNVERIFIED | Live ElevenLabs batch/outbound submit wired. Needs H2/H3/H10 + real warn_list phones. |
 | T13 Neon branches and surge simulation | LIVE-UNVERIFIED | SQLite surge works; Neon needs H6. |
-| T14 After-action report and proof panel | DONE | Live Gemini draft when keyed; proof reads measured files only. |
+| T14 After-action report and proof panel | DONE | Fixed Nov 15 ~2:45 AM: lite model 429 → cascade to `gemini-3.5-flash`; brief/report/sign always 200 with honest local draft. Console Sign & close verified on confirmed fire. LIVE-UNVERIFIED: sustained free-tier quota may still show “Local draft · Gemini quota”. |
 | T15 Evaluation harness | LIVE-UNVERIFIED | Fixture `make eval` works; live personas need phones. |
 | T16 Stretch integrations | BLOCKED | Cut until core live path is green. |
 | T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | See `docs/LIVE_E2E.md`. Devpost is H11. |
@@ -27,10 +27,14 @@
 
 Ceremony credit map: [docs/CEREMONY_SPONSOR_CREDITS.md](docs/CEREMONY_SPONSOR_CREDITS.md) (Opening Ceremony PDF is source of truth).
 
+**H2 Creator claimed (Nov 14 ~9:35 PM PT):** ElevenLabs subscription is **`tier: creator` / `active`**.
+
+**Twilio re-linked (Nov 14 ~11:45 PM PT):** Correct account `ACf769…` + auth token in `.env`. Number `+17433304352` present, voice URL → ElevenLabs inbound, agent assigned, balance > $0. Trial still limits *outbound* to verified numbers only — inbound dials should work.
+
 Fill these in **local `.env` only**, then say `keys ready`:
 
 - H4 Gemini: sign in at `https://mlh.link/aistudio` (Google) → copy key into `GEMINI_API_KEY`
-- H2 ElevenLabs Creator: claim via **Slack**/staff (ceremony QR), then `https://elevenlabs.io/app/sign-up` → API key
+- H2 ElevenLabs Creator: claim via **Slack**/staff (ceremony QR), then `https://elevenlabs.io/app/sign-up` → API key · **blocking dials now**
 - H3 Twilio trial → import number into ElevenLabs → `ELEVENLABS_PHONE_NUMBER_ID`
 - H5 Bright Data: `https://brightdata.com/cp/start` + promo **`sandhacks26`** (room note; not printed on ceremony slide)
 - H6 Neon: `https://console.neon.tech/signup` + promo **`hackonneon`** when billing asks
@@ -60,10 +64,17 @@ Silent demo script: `DEMO_FLOW.md`. Stage rail (Standby → Call → Confirm →
 
 Local signals glass box (`/api/state` + `signal.new`), incoming `call.started` pop (auto-select + Open/Jump in), AGNI-stuck → `call.needs_human` + J takeover CTA. Prove: `python -m unittest backend.tests.test_needs_human` + hard-refresh :5173. JUMP IN live phone still H10 / `DISPATCHER_PHONE_NUMBER`.
 
+## Map + CCTV fix (Nov 15 ~2:25 AM) — DONE (local)
+
+Bijin furious screenshot: gray “Map data not yet available” tiles + CCTV stuck on “Loading still…”.
+- Map → Esri **World Imagery** (+ Boundaries_and_Places labels). CARTO stamps API KEY REQUIRED; Esri Dark Gray stamps Map data not yet available.
+- CCTV → debounce + parallel frame fetch + progressive shells; pin key rounded to 0.001° so live-call SSE does not thrash loaders forever. Verified: 3× 1920×1080 blob stills (UCSD TDLLN 1/2, Black Mtn) + imagery tiles 256².
+Hard-refresh :5173. Tunnel untouched.
+
 ## Live-call screenshot fix (Nov 14 night) — DONE (local)
 
 Bijin screenshot: gray Esri “Map data not yet available”, coach copy looking like transcript, “Jacobs Call Center” with no pin/CCTV.
-- Map → HTTPS CARTO `dark_all` (+ invalidateSize); Esri Canvas removed.
+- Map → HTTPS CARTO `dark_all` (+ invalidateSize); Esri Canvas removed. *(superseded Nov 15 — CARTO now needs key)*
 - Role legend moved out of transcript; `/api/state` hydrates `calls[].transcript`.
 - Spoken landmark preferred; miss → region geocode, else “Location: not yet”; CCTV waits for lat/lon.
 - Agent prompt patched: use spoken place words (Vons / Torrey Pines / UCSD…), not call-center names.
@@ -73,8 +84,12 @@ Hard-refresh :5173 **and restart API** (so landmarks re-seed) before next dial. 
 ## BLOCKED for full live demo (Bijin)
 
 - **NEEDS BIJIN:** Twilio trial → upgrade + approve a Content Template, then set `TWILIO_CONTENT_SID` in `.env` (API already wired). Until then SMS to callers fails; dispatcher Copy-link path is the demo workaround.
-- JUMP IN warm transfer still needs a answered live phone check (H10).
+- JUMP IN warm transfer still needs a answered live phone check (H10). UI now confirms first (may drop caller on this plan); hand-back = callback.
 - Real warning calls: only opt-in `+18582479608` is live-safe in `seed/warn_list.json`; keep placeholders refused.
+
+## Call cut @ ~03:37 PT (Nov 15) — diagnosed
+
+Latest intake: `termination_reason=Call ended by remote party`, all tools `HTTP 530` (dead CF tunnel). **No** jump-in/hand-back in API logs. Clean slate at 03:40 wiped DB after. Tunnel restored to Serveo; `/health` + `report_fire` 200. Console: Clean slate blocked while call live; JUMP IN asks confirm. Hard-refresh :5173.
 
 ### BLOCKED: needs Bijin – Twilio SMS camera links (trial 572006)
 

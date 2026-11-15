@@ -16,16 +16,27 @@ DB_PATH = Path(os.environ.get("AGNI_DB_PATH", ROOT / "data" / "agni-api.sqlite")
 
 @contextmanager
 def connect():
+    """Open a short SQLite connection.
+
+    Do NOT call bus.emit() (or open another writer) while this context is open —
+    nested writers caused live phone `report_fire` 500s (`database is locked`)
+    so the console never updated when someone dialed.
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+    db = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=30000")
+    db.execute("PRAGMA synchronous=NORMAL")
     db.execute("PRAGMA foreign_keys=ON")
     try:
         yield db
         db.commit()
     except Exception:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise
     finally:
         db.close()

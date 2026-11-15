@@ -93,42 +93,127 @@ def _webmerc_to_lonlat(x: float, y: float) -> tuple[float, float]:
     return lon, lat
 
 
+_CAM_LAYER = (
+    "https://services8.arcgis.com/X84q166Srnyl4JMV/ArcGIS/rest/services/"
+    "ALERTCalifornia_Camera_Feed/FeatureServer/0/query"
+)
+# Widen until we have usable stills — never leave the console blank if the network works.
+_CAM_RADIUS_STEPS_M = (40_000, 80_000, 150_000, 300_000, 500_000)
+
+
+def _parse_camera_features(features: list, lat: float, lon: float) -> list[dict]:
+    out = []
+    for f in features or []:
+        a = f.get("attributes", {}) or {}
+        g = f.get("geometry", {}) or {}
+        if g.get("x") is None:
+            continue
+        clon, clat = _webmerc_to_lonlat(g["x"], g["y"])
+        image = a.get("imageURL") or ""
+        out.append({
+            "id": _camera_id(image, a.get("OBJECTID"), a.get("cameraName")),
+            "name": a.get("cameraName") or a.get("siteId") or "camera",
+            "site": a.get("siteId"),
+            "url": a.get("cameraURL"),
+            "image": image,
+            "online": a.get("isOnline") or "",
+            "lat": round(clat, 5), "lon": round(clon, 5),
+            "km": round(_haversine_km(lat, lon, clat, clon), 2),
+            "updated": a.get("lastUpdated") or a.get("captureTime") or a.get("EditDate") or None,
+        })
+    return out
+
+
+def _rank_cameras(rows: list[dict]) -> list[dict]:
+    """Prefer online cams with a still URL, then nearest."""
+    def score(c: dict) -> tuple:
+        online = str(c.get("online") or "").lower()
+        online_rank = 0 if online in {"online", "yes", "true", "1"} else 1
+        has_image = 0 if str(c.get("image") or "").startswith("https://cameras.alertcalifornia.org/") else 1
+        return (has_image, online_rank, float(c.get("km") or 9e9))
+    return sorted(rows, key=score)
+
+
 def cameras(lat: float, lon: float, radius_m: int = 40000) -> list[dict]:
     """ALERTCalifornia camera sites near a point. Operated by UC San Diego."""
     key = f"cams:{lat:.2f},{lon:.2f},{radius_m}"
 
     def fetch():
-        base = ("https://services8.arcgis.com/X84q166Srnyl4JMV/ArcGIS/rest/services/"
-                "ALERTCalifornia_Camera_Feed/FeatureServer/0/query")
         qs = urllib.parse.urlencode({
             "geometry": f"{lon},{lat}", "geometryType": "esriGeometryPoint", "inSR": "4326",
             "distance": radius_m, "units": "esriSRUnit_Meter",
             "spatialRel": "esriSpatialRelIntersects", "outFields": "*",
             "returnGeometry": "true", "f": "json",
         })
-        data = _get(f"{base}?{qs}", timeout=10)
-        out = []
-        for f in data.get("features", []):
-            a = f.get("attributes", {}) or {}
-            g = f.get("geometry", {}) or {}
-            if g.get("x") is None:
-                continue
-            clon, clat = _webmerc_to_lonlat(g["x"], g["y"])
-            image = a.get("imageURL") or ""
-            out.append({
-                "id": _camera_id(image, a.get("OBJECTID"), a.get("cameraName")),
-                "name": a.get("cameraName") or a.get("siteId") or "camera",
-                "site": a.get("siteId"),
-                "url": a.get("cameraURL"),
-                "image": image,
-                "online": a.get("isOnline") or "",
-                "lat": round(clat, 5), "lon": round(clon, 5),
-                "km": round(_haversine_km(lat, lon, clat, clon), 2),
-            })
+        data = _get(f"{_CAM_LAYER}?{qs}", timeout=10)
+        out = _parse_camera_features(data.get("features", []), lat, lon)
         out.sort(key=lambda c: c["km"])
         return out
 
     return cached(key, CAMERA_TTL, fetch) or []
+
+
+def cameras_latest(lat: float, lon: float, n: int = 3) -> dict:
+    """Always try to return usable ALERTCalifornia cams — expand radius, then county dump.
+
+    Returns {cameras, radius_m, fallback} so the console can label honestly.
+    """
+    n = max(1, min(int(n or 3), 12))
+    seen: dict[str, dict] = {}
+    used_radius = _CAM_RADIUS_STEPS_M[0]
+    fallback = False
+
+    for radius_m in _CAM_RADIUS_STEPS_M:
+        used_radius = radius_m
+        for cam in cameras(lat, lon, radius_m=radius_m):
+            cid = str(cam.get("id") or "")
+            if not cid or cid in seen:
+                continue
+            seen[cid] = cam
+        ranked = _rank_cameras(list(seen.values()))
+        usable = [
+            c for c in ranked
+            if str(c.get("image") or "").startswith("https://cameras.alertcalifornia.org/")
+        ]
+        if len(usable) >= n:
+            return {
+                "cameras": usable[:n],
+                "radius_m": used_radius,
+                "fallback": used_radius > _CAM_RADIUS_STEPS_M[0],
+                "source": "alertcalifornia",
+            }
+
+    # Last resort: pull a batch from the layer (no spatial filter) and rank by distance.
+    fallback = True
+    key = f"cams:layerdump:{lat:.1f},{lon:.1f}"
+
+    def fetch_dump():
+        qs = urllib.parse.urlencode({
+            "where": "1=1",
+            "outFields": "*",
+            "returnGeometry": "true",
+            "resultRecordCount": 80,
+            "f": "json",
+        })
+        data = _get(f"{_CAM_LAYER}?{qs}", timeout=12)
+        return _parse_camera_features(data.get("features", []), lat, lon)
+
+    dump = cached(key, CAMERA_TTL, fetch_dump) or []
+    for cam in dump:
+        cid = str(cam.get("id") or "")
+        if cid and cid not in seen:
+            seen[cid] = cam
+    ranked = _rank_cameras(list(seen.values()))
+    usable = [
+        c for c in ranked
+        if str(c.get("image") or "").startswith("https://cameras.alertcalifornia.org/")
+    ] or ranked
+    return {
+        "cameras": usable[:n],
+        "radius_m": used_radius,
+        "fallback": fallback or True,
+        "source": "alertcalifornia_latest",
+    }
 
 
 def _camera_id(image: str, object_id, name) -> str:
@@ -147,12 +232,23 @@ _FRAME_TTL = 12.0
 _FRAMES: dict[str, dict] = {}
 
 
+def _find_camera(lat: float, lon: float, camera_id: str) -> dict | None:
+    """Find a camera by id, expanding search so far fallback cams still resolve."""
+    if not camera_id:
+        return None
+    for radius_m in _CAM_RADIUS_STEPS_M:
+        match = next((c for c in cameras(lat, lon, radius_m=radius_m) if c.get("id") == camera_id), None)
+        if match:
+            return match
+    pack = cameras_latest(lat, lon, n=12)
+    return next((c for c in pack.get("cameras") or [] if c.get("id") == camera_id), None)
+
+
 def camera_jpeg(lat: float, lon: float, camera_id: str) -> bytes | None:
     """Latest still for a camera we already know about. Refuses any other URL."""
     if not camera_id or len(camera_id) > 80:
         return None
-    cams = cameras(lat, lon)
-    match = next((c for c in cams if c.get("id") == camera_id), None)
+    match = _find_camera(lat, lon, camera_id)
     image = (match or {}).get("image") or ""
     if not image.startswith("https://cameras.alertcalifornia.org/"):
         return None
@@ -161,9 +257,16 @@ def camera_jpeg(lat: float, lon: float, camera_id: str) -> bytes | None:
         hit = _FRAMES.get(camera_id)
         if hit and now - hit["at"] < _FRAME_TTL:
             return hit["bytes"]
-    req = urllib.request.Request(image, headers={"User-Agent": UA, "Accept": "image/jpeg"})
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        blob = resp.read(2_000_000)
+    # Bust CDN caches so we get the newest still when the URL is stable.
+    bust = image + (("&" if "?" in image else "?") + f"_agni={int(now)}")
+    req = urllib.request.Request(bust, headers={"User-Agent": UA, "Accept": "image/jpeg", "Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            blob = resp.read(2_000_000)
+    except Exception:
+        req = urllib.request.Request(image, headers={"User-Agent": UA, "Accept": "image/jpeg"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            blob = resp.read(2_000_000)
     if not blob:
         return None
     with _LOCK:

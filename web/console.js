@@ -130,9 +130,15 @@
       return;
     }
     map = L.map("tmap", { zoomControl: false, attributionControl: true, minZoom: 3 });
-    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
-      maxZoom: 16,
-      attribution: "Tiles &copy; Esri"
+    // World Imagery — Dark Gray Canvas watermarks "Map data not yet available"; CARTO needs a key.
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+      className: "agni-basemap"
+    }).addTo(map);
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19,
+      opacity: 0.85
     }).addTo(map);
     L.control.zoom({ position: "bottomright" }).addTo(map);
     L.control.scale({ imperial: false, position: "bottomleft" }).addTo(map);

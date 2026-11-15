@@ -72,7 +72,8 @@ def route_unit(
 
     osrm = httputil.env("OSRM_BASE_URL") or "https://router.project-osrm.org"
     status, payload = httputil.request_json(
-        f"{osrm.rstrip('/')}/route/v1/driving/{origin[1]},{origin[0]};{destination[1]},{destination[0]}?overview=false",
+        f"{osrm.rstrip('/')}/route/v1/driving/{origin[1]},{origin[0]};"
+        f"{destination[1]},{destination[0]}?overview=full&geometries=geojson",
         timeout=8,
     )
     if 200 <= status < 300 and isinstance(payload, dict) and payload.get("code") == "Ok":
@@ -82,7 +83,7 @@ def route_unit(
                 "distance_m": round(float(route["distance"])),
                 "eta_s": round(float(route["duration"])),
                 "route_kind": "road",
-                "geometry": None,
+                "geometry": route.get("geometry"),
                 "note": "OSRM driving route (closures not avoided on this fallback).",
             }
         except (KeyError, IndexError, TypeError, ValueError):

@@ -35,6 +35,16 @@ class LandmarkTests(unittest.TestCase):
         self.assertIsNotNone(jacobs)
         self.assertEqual(jacobs["id"], "jacobs-school")
         self.assertTrue(32.87 < jacobs["lat"] < 32.89)
+        for phrase in (
+            "Jacobs Hall UCSD",
+            "Jacobs Hall",
+            "Jacobs School of Engineering UCSD",
+        ):
+            hit = match_landmark(phrase, rows)
+            self.assertIsNotNone(hit, phrase)
+            self.assertEqual(hit["id"], "jacobs-school", phrase)
+            self.assertEqual((hit["lat"], hit["lon"]), (32.8817, -117.2334), phrase)
+            self.assertEqual(hit["location_src"], "landmark", phrase)
         geisel = match_landmark("near Geisel Library", rows)
         self.assertIsNotNone(geisel)
         self.assertEqual(geisel["id"], "geisel")

@@ -138,6 +138,12 @@ class WarningInput(BaseModel):
     message_key: str = Field(default="wildfire_targeted_warning", min_length=1, max_length=80)
 
 
+class EscapeSmsInput(BaseModel):
+    actor: str = Field(default="dispatcher", min_length=1, max_length=100)
+    # Optional override — must still be on the opt-in warn list.
+    phone: str | None = Field(default=None, max_length=32)
+
+
 class SurgeInput(BaseModel):
     n: int = Field(default=75, ge=3, le=75)
     seconds: int = Field(default=90, ge=1, le=90)
@@ -526,12 +532,18 @@ async def resolve_call_landmark(iid: str, conversation_id: str, spoken: str) -> 
         and existing.get("lon") is not None
         and existing.get("location_src") == "caller"
     )
-    extracted = await asyncio.to_thread(landmark_service.extract_landmark, spoken)
-    # Gemini often blanks on timeout — still match the caller's spoken words against cache.
-    query = (extracted.get("text") or "").strip() or (spoken or "").strip()
-    match = await asyncio.to_thread(landmark_service.locate, query)
-    if not match and spoken and query != (spoken or "").strip():
-        match = await asyncio.to_thread(landmark_service.locate, spoken)
+    # Cache-first: spoken aliases like "Jacobs Hall UCSD" must pin immediately.
+    # Gemini extract runs only when the cache misses (quota/timeout was delaying the map).
+    spoken_q = (spoken or "").strip()
+    match = await asyncio.to_thread(landmark_service.locate, spoken_q) if spoken_q else None
+    extracted: dict = {"text": spoken_q, "status": "cache_first"}
+    if not match:
+        extracted = await asyncio.to_thread(landmark_service.extract_landmark, spoken)
+        query = (extracted.get("text") or "").strip() or spoken_q
+        match = await asyncio.to_thread(landmark_service.locate, query)
+        if not match and spoken_q and query != spoken_q:
+            match = await asyncio.to_thread(landmark_service.locate, spoken_q)
+    query = (extracted.get("text") or "").strip() or spoken_q
     loc_src = (match or {}).get("location_src") or ("landmark" if match else None)
     if match and loc_src == "landmark":
         detail = "Pin from cached San Diego landmarks"
@@ -660,8 +672,8 @@ def get_state(_: str = Depends(operator)):
         elif src == "caller":
             inc["landmark_chip"] = "Caller GPS"
     state["brightdata"] = {
-        "mission": "Residents mentioned smoke earlier · raises priority only · never dispatches",
-        "label": "Public ears (Bright Data)",
+        "mission": "Cached public mentions near the pin · raises priority only · never dispatches",
+        "label": "Live area report",
         "cache_only": True,
         "first_mention_by_incident": stories,
     }
@@ -758,54 +770,165 @@ def evidence(iid: str, _: str = Depends(operator)):
     }
 
 
+def _find_open_incident_for_phone(phone: str | None, *, within_s: int = 1800) -> str | None:
+    """Same caller redialing within 30 min should not spawn a second fire row."""
+    if not phone or len(phone) < 8:
+        return None
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT c.incident_id, c.started_at, i.status FROM calls c "
+            "JOIN incidents i ON i.id = c.incident_id "
+            "WHERE c.phone_e164 = ? AND i.status IN ('possible','confirmed','dispatched') "
+            "ORDER BY c.rowid DESC LIMIT 8",
+            (phone,),
+        ).fetchall()
+    now = time.time()
+    for r in row:
+        started = r["started_at"] or ""
+        try:
+            age = now - datetime.fromisoformat(started.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            age = within_s + 1
+        if age <= within_s:
+            return r["incident_id"]
+    return None
+
+
 @app.post("/api/tools/report_fire")
 async def report_fire(payload: IncidentIn, _: None = Depends(tool_auth)):
+    """Voice intake. Must return <800ms and ALWAYS emit call.started so the UI updates."""
     if not db.overflow_enabled():
-        return {"incident_id":None,"overflow":False,"say":"Please hang up and dial 911."}
+        return {"incident_id": None, "overflow": False, "say": "Please hang up and dial 911."}
+
+    # Reads / phone lookup BEFORE any write transaction (no nested SQLite writers).
     with db.connect() as conn:
-        call = conn.execute("SELECT incident_id FROM calls WHERE id=?", (payload.conversation_id,)).fetchone()
-        if call and call["incident_id"]:
-            iid = call["incident_id"]
-            conn.execute("UPDATE calls SET landmark_text=?,language=? WHERE id=?",
-                         (payload.landmark_text, payload.language, payload.conversation_id))
-            return {"incident_id":iid,"overflow":True,"say":"Got it. Which way is the smoke from you?"}
-        iid="inc_"+uuid4().hex[:10]
-        phone = (payload.phone or "").strip() or None
-        last4 = phone[-4:] if phone and len(phone) >= 4 else None
-        # Immediate pin only when the payload carries real coords (Twilio / client / tool).
-        has_gps = payload.lat is not None and payload.lon is not None
-        loc_src = "caller" if has_gps else None
-        conn.execute("INSERT INTO incidents(id,status,level,kind,title,lat,lon,location_src,description) VALUES(?,?,?,?,?,?,?,?,?)",
-                     (iid,"possible",3,"fire","Possible fire report",payload.lat,payload.lon,loc_src,payload.what_seen))
+        call = conn.execute(
+            "SELECT incident_id FROM calls WHERE id=?", (payload.conversation_id,)
+        ).fetchone()
+        existing_iid = call["incident_id"] if call and call["incident_id"] else None
+
+    if existing_iid:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE calls SET landmark_text=?,language=? WHERE id=?",
+                (payload.landmark_text, payload.language, payload.conversation_id),
+            )
+        return {
+            "incident_id": existing_iid, "overflow": True,
+            "say": "Got it. Which way is the smoke from you?",
+            "resume": False, "skip_intake": False,
+        }
+
+    phone = (payload.phone or "").strip() or None
+    if not phone:
+        phone = await asyncio.to_thread(_lookup_caller_phone, payload.conversation_id)
+    last4 = phone[-4:] if phone and len(phone) >= 4 else None
+    reuse_iid = _find_open_incident_for_phone(phone)
+
+    if reuse_iid:
+        resume_lat = resume_lon = None
+        has_pin = had_needs = False
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE calls SET state='ended', ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+                "WHERE phone_e164=? AND state IN ('live','human') AND id<>?",
+                (phone, payload.conversation_id),
+            )
+            conn.execute(
+                "INSERT INTO calls(id,incident_id,direction,language,landmark_text,phone_e164,phone_last4,state) "
+                "VALUES(?,?,'inbound',?,?,?,?,'live')",
+                (payload.conversation_id, reuse_iid, payload.language, payload.landmark_text, phone, last4),
+            )
+            inc = conn.execute(
+                "SELECT lat, lon FROM incidents WHERE id=?", (reuse_iid,)
+            ).fetchone()
+            prior_needs = conn.execute(
+                "SELECT needs_json FROM calls WHERE incident_id=? AND needs_json IS NOT NULL "
+                "AND needs_json != '' AND needs_json != '{}' ORDER BY rowid DESC LIMIT 1",
+                (reuse_iid,),
+            ).fetchone()
+            resume_lat = inc["lat"] if inc else None
+            resume_lon = inc["lon"] if inc else None
+            has_pin = resume_lat is not None and resume_lon is not None
+            try:
+                had_needs = bool(json.loads((prior_needs["needs_json"] if prior_needs else None) or "{}"))
+            except Exception:
+                had_needs = False
+        # Emit only AFTER commit — nested emit used to 500 live calls.
+        bus.emit("call.started", reuse_iid, {
+            "call_id": payload.conversation_id, "direction": "inbound_resume",
+            "language": payload.language, "phone_last4": last4,
+            "landmark_text": payload.landmark_text, "resume": True,
+            "lat": resume_lat, "lon": resume_lon,
+        })
+        asyncio.create_task(resolve_call_landmark(reuse_iid, payload.conversation_id, payload.landmark_text))
+        asyncio.create_task(_enrich_call_from_eleven(payload.conversation_id, reuse_iid))
+        if had_needs or has_pin:
+            return {
+                "incident_id": reuse_iid, "overflow": True, "resume": True,
+                "skip_intake": True, "has_pin": has_pin,
+                "say": (
+                    "You're back with AGNI. I still have your report. "
+                    "Stay on the line — I will give you the safest direction now."
+                ),
+            }
+        return {
+            "incident_id": reuse_iid, "overflow": True, "resume": True,
+            "skip_intake": False, "has_pin": has_pin,
+            "say": "Got it — same report. Which way is the smoke from you?",
+        }
+
+    iid = "inc_" + uuid4().hex[:10]
+    has_gps = payload.lat is not None and payload.lon is not None
+    loc_src = "caller" if has_gps else None
+    with db.connect() as conn:
         conn.execute(
-            "INSERT INTO calls(id,incident_id,direction,language,landmark_text,phone_e164,phone_last4) VALUES(?,?,'inbound',?,?,?,?)",
+            "INSERT INTO incidents(id,status,level,kind,title,lat,lon,location_src,description) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (iid, "possible", 3, "fire", "Possible fire report",
+             payload.lat, payload.lon, loc_src, payload.what_seen),
+        )
+        conn.execute(
+            "INSERT INTO calls(id,incident_id,direction,language,landmark_text,phone_e164,phone_last4) "
+            "VALUES(?,?,'inbound',?,?,?,?)",
             (payload.conversation_id, iid, payload.language, payload.landmark_text, phone, last4),
         )
         if has_gps:
             conn.execute(
                 "INSERT OR REPLACE INTO evidence(incident_id,source,state,detail,updated_at) "
                 "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-                (iid, "caller_location", "agree",
-                 "Caller GPS"),
+                (iid, "caller_location", "agree", "Caller GPS"),
             )
-    bus.emit("call.started",iid,{"call_id":payload.conversation_id,"direction":"inbound","language":payload.language,
-                                 "phone_last4": last4, "landmark_text": payload.landmark_text,
-                                 "lat": payload.lat, "lon": payload.lon})
-    bus.emit("incident.created",iid,{"status":"possible","level":3,"lat":payload.lat,"lon":payload.lon,
-                                     "location_src":loc_src,"landmark_text":payload.landmark_text,
-                                     "title":"Possible fire report"})
+
+    bus.emit("call.started", iid, {
+        "call_id": payload.conversation_id, "direction": "inbound",
+        "language": payload.language, "phone_last4": last4,
+        "landmark_text": payload.landmark_text,
+        "lat": payload.lat, "lon": payload.lon,
+    })
+    bus.emit("incident.created", iid, {
+        "status": "possible", "level": 3, "lat": payload.lat, "lon": payload.lon,
+        "location_src": loc_src, "landmark_text": payload.landmark_text,
+        "title": "Possible fire report",
+    })
     if has_gps:
-        # Fly the map now — do not wait on landmark extract / cache.
         bus.emit("evidence.updated", iid, {
             "source": "caller_location", "state": "agree",
             "detail": "Caller GPS",
             "lat": payload.lat, "lon": payload.lon, "location_src": "caller",
             "landmark_text": payload.landmark_text,
-            "why_line": f"Caller GPS · {payload.landmark_text}" if payload.landmark_text else "Caller GPS",
+            "why_line": (
+                f"Caller GPS · {payload.landmark_text}"
+                if payload.landmark_text else "Caller GPS"
+            ),
         })
     asyncio.create_task(resolve_call_landmark(iid, payload.conversation_id, payload.landmark_text))
     asyncio.create_task(_enrich_call_from_eleven(payload.conversation_id, iid))
-    return {"incident_id":iid,"overflow":True,"say":"Got it. Which way is the smoke from you?"}
+    return {
+        "incident_id": iid, "overflow": True,
+        "say": "Got it. Which way is the smoke from you?",
+        "resume": False, "skip_intake": False,
+    }
 
 
 @app.post("/api/tools/add_bearing")
@@ -970,7 +1093,8 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
         lat = incident["lat"] if incident else None
         lon = incident["lon"] if incident else None
         immobile = bool(incident and incident["immobile"])
-        if lat is not None and lon is not None and not immobile:
+        has_pin = lat is not None and lon is not None
+        if has_pin and not immobile:
             try:
                 chosen = routing.choose_shelter((float(lat), float(lon)), None, wind_to_deg)
                 shelter_payload = chosen.get("shelter")
@@ -986,12 +1110,22 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
                 "Quédese con ellos donde estén seguros. Mantenga el teléfono encendido. "
                 "Un despachador ya ve su pin y le dará prioridad."
             )
+        elif not has_pin:
+            # Never invent a path without a landmark/GPS pin — ask one clearer place.
+            say = (
+                "I do not have a safe map pin yet. Name a nearby store, school, or street, "
+                "then stay where you are safe. A dispatcher is watching."
+            ) if not es else (
+                "Aún no tengo un pin seguro. Diga una tienda, escuela o calle cercana, "
+                "y quédese donde esté seguro. Un despachador ya está atento."
+            )
         elif shelter_payload and shelter_payload.get("name"):
             direction = _cardinal(shelter_payload.get("bearing_deg"), lang=lang)
             name = shelter_payload["name"]
             room = shelter_payload.get("room")
+            dist_m = shelter_payload.get("distance_m")
             refused_name = (refused[0] or {}).get("name") if refused else None
-            # Spoken line judges hear — Bright Data capacity + not downwind. Keep ≤ ~25 words.
+            # Spoken line — Bright Data capacity, away from the fire pin, not downwind.
             if es:
                 core = (
                     f"Si puede salir con seguridad, vaya al {direction} hacia {name}."
@@ -1001,7 +1135,7 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
                 if isinstance(room, int):
                     core += f" Hay espacio para unas {room} personas."
                 if refused_name:
-                    core += f" No vaya a {refused_name}: está a favor del viento."
+                    core += f" No vaya a {refused_name}: no es seguro."
                 core += " Mantenga el teléfono encendido."
             else:
                 core = (
@@ -1012,25 +1146,46 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
                 if isinstance(room, int):
                     core += f" It has room for about {room} people."
                 if refused_name:
-                    core += f" Do not go to {refused_name} — it is downwind."
+                    core += f" Do not go to {refused_name} — it is not safe from here."
                 if hazard_n:
                     core += " Avoid closed roads on the way."
                 core += " Keep your phone on. A dispatcher can see your report."
             say = core
             reveal = True
         else:
+            # Pin exists but every Bright Data shelter is downwind or on top of the fire.
+            refuse_bit = ""
+            if refused:
+                refuse_bit = f" Not {refused[0].get('name')} — {refused[0].get('reason', 'not safe')}."
             say = (
-                "A dispatcher can see your report now. Stay where you are safe, "
-                "keep your phone on, and tell me if the smoke gets worse."
+                f"Stay where you are safe for now.{refuse_bit} "
+                "A dispatcher can see your pin and will pick the route. Keep your phone on."
             ) if not es else (
-                "Un despachador ya ve su reporte. Quédese donde esté seguro, "
-                "mantenga el teléfono encendido, y dígame si el humo empeora."
+                f"Quédese donde esté seguro por ahora.{refuse_bit} "
+                "Un despachador ya ve su pin y elegirá la ruta. Mantenga el teléfono encendido."
             )
+
+    escape = None
+    if reveal and iid and shelter_payload and has_pin:
+        try:
+            with db.connect() as conn:
+                raw_hazards = [dict(r) for r in conn.execute(
+                    "SELECT * FROM hazards WHERE kind='road_closure'")]
+            closures = []
+            for hazard in raw_hazards:
+                try:
+                    closures.append({**hazard, "geometry": json.loads(hazard.get("geometry_json") or "null")})
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            escape = routing.escape_path((float(lat), float(lon)), shelter_payload, closures)
+        except Exception:
+            escape = routing.escape_path((float(lat), float(lon)), shelter_payload, [])
 
     if reveal and iid and shelter_payload:
         bus.emit("guidance.ready", iid, {
             "say": say,
             "shelter": shelter_payload,
+            "escape": escape,
             "refused": refused[:3],
             "source": "brightdata_shelter_cache",
             "label": "Bright Data · safest open shelter (not downwind)",
@@ -1040,7 +1195,7 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
 
     return {"say": say, "incident_id": iid, "confirmed": confirmed, "dispatched": dispatched,
             "should_transfer": transfer, "dispatcher_phone_set": dispatcher_phone,
-            "shelter": shelter_payload, "eta_s": eta_s, "refused": refused,
+            "shelter": shelter_payload, "escape": escape, "eta_s": eta_s, "refused": refused,
             "guidance_source": "brightdata_shelter_cache" if reveal else None}
 
 
@@ -1527,17 +1682,20 @@ async def triage_cameras(iid: str, n: int = 3, _: str = Depends(operator)):
         raise HTTPException(409, "Incident needs a location before cameras can be checked")
     if settings.mock:
         raise HTTPException(503, "Camera triage is unavailable in mock mode")
-    cams = feeds.cameras(float(item["lat"]), float(item["lon"]))[:max(1, min(n, 3))]
+    want = max(1, min(n, 3))
+    pack = feeds.cameras_latest(float(item["lat"]), float(item["lon"]), n=max(want * 2, 6))
+    cams = pack.get("cameras") or []
     if not cams:
-        raise HTTPException(404, "No ALERTCalifornia cameras near this pin")
+        raise HTTPException(404, "No ALERTCalifornia cameras available right now")
     verdicts = []
     smoke_hits = 0
     level = item["level"]
+    # Prefer cams that actually return a still; skip dead feeds and keep searching.
     for cam in cams:
+        if sum(1 for v in verdicts if v.get("status") != "no_frame") >= want:
+            break
         blob = await asyncio.to_thread(feeds.camera_jpeg, float(item["lat"]), float(item["lon"]), cam["id"])
         if not blob:
-            verdicts.append({"camera_id": cam["id"], "name": cam.get("name"), "label": "cant_tell",
-                             "reason": "Frame unavailable", "status": "no_frame"})
             continue
         result = await asyncio.to_thread(vision.assess, blob, "image/jpeg")
         if result["label"] in {"smoke", "flames"}:
@@ -1551,9 +1709,13 @@ async def triage_cameras(iid: str, n: int = 3, _: str = Depends(operator)):
             "label": result["label"], "box": result.get("box_2d"),
             "flames_visible": result.get("flames_visible", False),
             "reason": result["reason"], "status": result.get("status"),
+            "km": cam.get("km"),
+            "fallback": bool(pack.get("fallback")),
         }
         bus.emit("triage.result", iid, data)
         verdicts.append(data)
+    if not verdicts:
+        raise HTTPException(503, "ALERTCalifornia stills unavailable right now")
     detail = (
         f"{smoke_hits} of {len(verdicts)} cams see smoke"
         if smoke_hits else
@@ -1632,8 +1794,8 @@ _MOCK_CAMERAS = [
 ]
 
 
-def _nearest_cameras(lat: float, lon: float, n: int = 3) -> list[dict]:
-    """ALERTCalifornia in live mode; honest mock tiles when AGNI_MOCK=1."""
+def _nearest_cameras(lat: float, lon: float, n: int = 3) -> dict:
+    """ALERTCalifornia in live mode; expand radius until stills exist. Mock tiles when AGNI_MOCK=1."""
     if settings.mock:
         out = []
         for cam in _MOCK_CAMERAS[:max(1, min(n, 3))]:
@@ -1642,13 +1804,29 @@ def _nearest_cameras(lat: float, lon: float, n: int = 3) -> list[dict]:
                 ((item["lat"] - lat) ** 2 + (item["lon"] - lon) ** 2) ** 0.5 * 111, 2
             )
             out.append(item)
-        return out
-    return feeds.cameras(lat, lon)[:max(1, min(n, 12))]
+        return {"cameras": out, "radius_m": 40000, "fallback": False, "source": "mock"}
+    return feeds.cameras_latest(lat, lon, n=max(1, min(n, 12)))
 
 
 @app.get("/api/cameras")
-def cameras(lat: float, lon: float, n: int = 3, _: str = Depends(operator)):
-    cams = _nearest_cameras(lat, lon, n)
+def cameras(
+    lat: float | None = None,
+    lon: float | None = None,
+    n: int = 3,
+    _: str = Depends(operator),
+):
+    """Nearest ALERTCalifornia stills. If none near the pin (or no pin), expand to latest available."""
+    used_fallback_center = False
+    if lat is None or lon is None:
+        spot = None if settings.mock else feeds.area()
+        if spot and spot.get("lat") is not None and spot.get("lon") is not None:
+            lat, lon = float(spot["lat"]), float(spot["lon"])
+        else:
+            # San Diego demo center — only when area env is unset.
+            lat, lon = 32.92, -117.25
+        used_fallback_center = True
+    pack = _nearest_cameras(float(lat), float(lon), n)
+    cams = pack.get("cameras") or []
     frame_source = "replay" if (settings.demo_replay or settings.mock) else "live"
     result = []
     for cam in cams:
@@ -1656,10 +1834,28 @@ def cameras(lat: float, lon: float, n: int = 3, _: str = Depends(operator)):
         # Browser loads stills through our proxy (ALERTCalifornia hotlink often blank in the console).
         item["frame"] = f"/api/cameras/{item['id']}/frame?lat={lat}&lon={lon}"
         item["frame_source"] = frame_source
+        if pack.get("fallback") or used_fallback_center:
+            item["fallback"] = True
         result.append(item)
     public = [{k: v for k, v in cam.items() if k != "image"} for cam in result]
-    bus.emit("cameras.selected", None, {"cameras": public, "frame_source": frame_source})
-    return {"cameras": result, "count": len(result), "frame_source": frame_source}
+    bus.emit("cameras.selected", None, {
+        "cameras": public,
+        "frame_source": frame_source,
+        "radius_m": pack.get("radius_m"),
+        "fallback": bool(pack.get("fallback") or used_fallback_center),
+        "search_lat": lat,
+        "search_lon": lon,
+    })
+    return {
+        "cameras": result,
+        "count": len(result),
+        "frame_source": frame_source,
+        "radius_m": pack.get("radius_m"),
+        "fallback": bool(pack.get("fallback") or used_fallback_center),
+        "source": pack.get("source") or "alertcalifornia",
+        "search_lat": lat,
+        "search_lon": lon,
+    }
 
 
 def _mock_camera_jpeg(camera_id: str) -> bytes:
@@ -1747,13 +1943,104 @@ def route(iid: str,_: str=Depends(operator)):
         avoids or bd_titles,
         shelters.get("shelter"),
     )
+    shelter = attr.get("shelter") or shelters["shelter"]
+    escape = routing.escape_path((item["lat"], item["lon"]), shelter, closures)
+    # Prefer road geometry on the top unit for the dispatch line.
+    unit_geo = None
+    if top:
+        unit_geo = top[0].get("geometry") or top[0].get("geojson")
     data = {
         "units": top, "route_kind": kind, "avoids": avoids,
-        "shelter": attr.get("shelter") or shelters["shelter"],
+        "shelter": shelter,
+        "escape": escape,
+        "geojson": unit_geo,
         "refused": shelters["refused"], "note": note,
         "brightdata_chips": attr.get("chips") or [],
     }
     bus.emit("route.ready", iid, data)
+    return data
+
+
+@app.post("/api/incidents/{iid}/escape-sms")
+def send_escape_sms(iid: str, payload: EscapeSmsInput, actor: str = Depends(operator)):
+    """Human-only: text the nearest safe shelter + maps link to an opt-in phone."""
+    item = incident_or_404(iid)
+    if item.get("lat") is None or item.get("lon") is None:
+        raise HTTPException(409, "Need a verified pin before texting a safe path")
+    with db.connect() as conn:
+        ring = conn.execute(
+            "SELECT wind_json FROM rings WHERE incident_id=? ORDER BY id DESC LIMIT 1", (iid,)
+        ).fetchone()
+        call = conn.execute(
+            "SELECT phone_e164, phone_last4 FROM calls WHERE incident_id=? "
+            "AND phone_e164 IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+            (iid,),
+        ).fetchone()
+        raw_hazards = [dict(r) for r in conn.execute("SELECT * FROM hazards WHERE kind='road_closure'")]
+    wind_to_deg = None
+    if ring:
+        try:
+            wind_to_deg = json.loads(ring["wind_json"] or "{}").get("to_deg")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            wind_to_deg = None
+    chosen = routing.choose_shelter((float(item["lat"]), float(item["lon"])), None, wind_to_deg)
+    shelter = chosen.get("shelter")
+    if not shelter or not shelter.get("name"):
+        raise HTTPException(409, "No safe shelter away from the pin yet")
+    closures = []
+    for hazard in raw_hazards:
+        try:
+            closures.append({**hazard, "geometry": json.loads(hazard.get("geometry_json") or "null")})
+        except (TypeError, json.JSONDecodeError):
+            continue
+    escape = routing.escape_path((float(item["lat"]), float(item["lon"])), shelter, closures)
+    phone = (payload.phone or "").strip() or (call["phone_e164"] if call else None)
+    if not phone:
+        # Fall back to first opted-in contact (demo: dispatcher phone on warn list).
+        contacts = warning_service.opted_in_contacts()
+        phone = contacts[0]["phone"] if contacts else None
+    if not phone:
+        raise HTTPException(409, "No caller phone on file and no opt-in number available")
+    if not warning_service.phone_opted_in(phone):
+        raise HTTPException(403, "SMS refused — number is not on the opt-in warn list")
+    maps = (escape or {}).get("maps_url") or (
+        f"https://www.google.com/maps/dir/?api=1&destination={shelter['lat']},{shelter['lon']}"
+    )
+    dist = shelter.get("distance_m") or (escape or {}).get("distance_m")
+    dist_bit = f" (~{int(dist)} m)" if isinstance(dist, (int, float)) else ""
+    body = (
+        f"AGNI safe path: head to {shelter['name']}{dist_bit}. "
+        f"Tap for directions: {maps}"
+    )
+    # Prefer freeform Body; Content Template uses the maps URL as {{1}} when set.
+    sms = _twilio_sms(phone, body, content_var=maps)
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
+            (
+                iid,
+                payload.actor or actor,
+                "escape_sms",
+                json.dumps({
+                    "phone_last4": phone[-4:],
+                    "shelter": shelter.get("name"),
+                    "sms_ok": bool(sms.get("ok")),
+                    "sms_reason": sms.get("reason") or sms.get("error"),
+                    "maps_url": maps,
+                    "route_kind": (escape or {}).get("route_kind"),
+                }),
+            ),
+        )
+    data = {
+        "shelter": shelter,
+        "escape": escape,
+        "phone_last4": phone[-4:],
+        "sms_ok": bool(sms.get("ok")),
+        "sms": sms,
+        "maps_url": maps,
+        "approved_by": payload.actor or actor,
+    }
+    bus.emit("escape.sms", iid, data)
     return data
 
 
@@ -1992,47 +2279,246 @@ def hand_back_call(call_id: str, payload: HandBackInput | None = None, _: str = 
     return _do_hand_back("", payload or HandBackInput(), call_id=call_id)
 
 
+@app.get("/api/incidents/{iid}/brief")
+def incident_live_brief(iid: str, _: str = Depends(operator)):
+    """Gemini live-area report from evidence + cached mentions + camera triage. Suggest only.
+    Never 500 — local draft if Gemini is slow, quota-hit, or down."""
+    try:
+        incident = incident_or_404(iid)
+    except Exception:
+        raise
+    evidence_rows: list = []
+    signals: list = []
+    cameras: list = []
+    wind = None
+    feeds_blob = None
+    try:
+        firms_key = bool(os.environ.get("FIRMS_MAP_KEY"))
+        with db.connect() as conn:
+            evidence_rows = [dict(r) for r in conn.execute(
+                "SELECT source,state,detail FROM evidence WHERE incident_id=? ORDER BY source", (iid,))]
+            if not evidence_rows:
+                evidence_rows = evidence_service.default_rows(firms_key_set=firms_key)
+            try:
+                signals = [dict(r) for r in conn.execute(
+                    "SELECT id,source,text,place_text,confidence,about_fire,scraped_at,incident_id "
+                    "FROM signals WHERE about_fire=1 AND (incident_id=? OR incident_id IS NULL) "
+                    "ORDER BY scraped_at DESC LIMIT 8",
+                    (iid,),
+                )]
+            except Exception:
+                signals = []
+            try:
+                cameras = [dict(r) for r in conn.execute(
+                    "SELECT camera_id,label,reason,frame_source,captured_at FROM triage_results "
+                    "WHERE incident_id=? ORDER BY id DESC LIMIT 6",
+                    (iid,),
+                )]
+            except Exception:
+                cameras = []
+            for cam in cameras:
+                cam["name"] = cam.get("camera_id")
+        # Enrich camera names from recent cameras.selected event if present
+        if not cameras:
+            with db.connect() as conn:
+                ev = conn.execute(
+                    "SELECT data_json FROM events WHERE incident_id=? AND type='cameras.selected' "
+                    "ORDER BY seq DESC LIMIT 1",
+                    (iid,),
+                ).fetchone()
+            if ev:
+                try:
+                    data = json.loads(ev["data_json"] or "{}")
+                    for c in (data.get("cameras") or [])[:6]:
+                        cameras.append({
+                            "name": c.get("name") or c.get("id"),
+                            "km": c.get("km"),
+                            "label": None,
+                            "reason": "Still loaded · not triaged yet" if c.get("id") else None,
+                            "frame_source": "live",
+                        })
+                except (TypeError, json.JSONDecodeError):
+                    pass
+        # Keep brief fast — use evidence for wind/FIRMS honesty; skip live feed round-trip.
+        wind = None
+        feeds_blob = {"camera_count": len(cameras) or None}
+        brief = gemini.incident_brief(
+            incident,
+            evidence_rows=evidence_rows,
+            signals=signals,
+            cameras=cameras,
+            wind=wind,
+            feeds_camera_count=len(cameras) or None,
+            firms_key_set=firms_key,
+        )
+    except Exception:
+        try:
+            from .services import gemini as gemini_svc
+
+            brief = gemini_svc._brief_fallback(  # noqa: SLF001 — polished local brief
+                incident if isinstance(incident, dict) else {},
+                evidence_rows=evidence_rows,
+                signals=signals,
+                cameras=cameras,
+                wind=wind,
+                feeds_camera_count=(feeds_blob or {}).get("camera_count") if feeds_blob else None,
+                firms_key_set=bool(os.environ.get("FIRMS_MAP_KEY")),
+            )
+        except Exception:
+            brief = {
+                "cctv_verdict": "no_fire",
+                "cctv_line": "CCTV: NO FIRE VISIBLE",
+                "verdict": "no_fire",
+                "verdict_text": "CCTV: NO FIRE VISIBLE",
+                "body_cctv": "Based on CCTV stills, there appears to be no fire in view.",
+                "body_news": "Nearby news and crowd posts look neutral for now.",
+                "body_other": "Satellite (FIRMS): not checked. Perimeter (NIFC): none mapped yet.",
+                "summary": "Based on CCTV stills, there appears to be no fire in view.",
+                "news": [],
+                "references": [],
+                "status": "polished",
+                "label": "Area brief · CCTV + news",
+            }
+    news = brief.get("references") or brief.get("news") or []
+    if not isinstance(news, list):
+        news = []
+    return {
+        "incident_id": iid,
+        "cctv_verdict": brief.get("cctv_verdict") or "no_fire",
+        "cctv_line": brief.get("cctv_line") or "CCTV: NO FIRE VISIBLE",
+        "verdict": brief.get("verdict") or "no_fire",
+        "verdict_text": brief.get("verdict_text")
+        or brief.get("headline")
+        or "CCTV: NO FIRE VISIBLE",
+        "verdict_detail": brief.get("verdict_detail") or brief.get("body_cctv"),
+        "badge_cls": brief.get("badge_cls") or "clear",
+        "headline": brief.get("headline")
+        or brief.get("verdict_text")
+        or brief.get("cctv_line"),
+        "body_cctv": brief.get("body_cctv"),
+        "body_news": brief.get("body_news"),
+        "body_other": brief.get("body_other"),
+        "summary": brief.get("summary"),
+        "agni_sees": brief.get("agni_sees"),
+        "news": news,
+        "references": news,
+        "news_label": brief.get("news_label") or "References · cached crowd / news",
+        "status": brief.get("status") or "polished",
+        "label": "Area brief · CCTV + news",
+        "sources": {
+            "evidence": len(evidence_rows),
+            "mentions": len(signals),
+            "cameras": len(cameras),
+            "news": len(news),
+            "wind": bool(wind),
+            "feeds": feeds_blob,
+        },
+        "mission": "Suggest only. Crowd posts raise priority. A human must Confirm.",
+    }
+
+
 @app.get("/api/incidents/{iid}/report")
 def get_report(iid: str, _: str = Depends(operator)):
+    """After-action draft + measured clock. Always 200 — local draft if Gemini fails."""
     incident = incident_or_404(iid)
     with db.connect() as conn:
         prior = conn.execute("SELECT * FROM reports WHERE incident_id=?", (iid,)).fetchone()
         events = [dict(r) for r in conn.execute(
             "SELECT type,ts,data_json FROM events WHERE incident_id=? ORDER BY seq", (iid,))]
-    if prior:
-        return dict(prior) | {"clock": json.loads(prior["clock_json"] or "{}")}
-    draft = gemini.report_draft(
-        [{"type": e["type"], "ts": e["ts"], "data": json.loads(e["data_json"])} for e in events],
-        incident,
-    )
+    if prior and prior["draft"]:
+        return {
+            "incident_id": iid,
+            "draft": prior["draft"],
+            "signed_by": prior["signed_by"] if "signed_by" in prior.keys() else None,
+            "signed_at": prior["signed_at"] if "signed_at" in prior.keys() else None,
+            "clock": json.loads(prior["clock_json"] or "{}"),
+            "source": "cached",
+            "label": "Saved draft",
+        }
+    parsed_events = []
+    for e in events:
+        try:
+            data = json.loads(e["data_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            data = {}
+        parsed_events.append({"type": e["type"], "ts": e["ts"], "data": data})
+    try:
+        meta = gemini.report_draft_meta(parsed_events, incident)
+        draft = meta.get("draft") or ""
+        source = meta.get("source") or "fallback"
+        label = meta.get("label") or "Local draft"
+    except Exception as exc:
+        draft = (
+            f"{incident.get('title') or 'Incident'} closed.\n"
+            f"Events logged: {len(events)}.\n"
+            f"Draft unavailable ({type(exc).__name__}).\n"
+            "A human signed every Confirm, Approve, and warning.\n"
+            "AGNI suggests only."
+        )
+        source = "fallback"
+        label = "Local draft · Gemini error"
     clock = {
         "first_event_ts": events[0]["ts"] if events else None,
         "last_event_ts": events[-1]["ts"] if events else None,
         "event_count": len(events),
     }
     with db.connect() as conn:
-        conn.execute("INSERT OR REPLACE INTO reports(incident_id,draft,clock_json) VALUES(?,?,?)",
-                     (iid, draft, json.dumps(clock)))
-    return {"incident_id": iid, "draft": draft, "signed_by": None, "signed_at": None, "clock": clock}
+        conn.execute(
+            "INSERT OR REPLACE INTO reports(incident_id,draft,clock_json) VALUES(?,?,?)",
+            (iid, draft, json.dumps(clock)),
+        )
+        conn.commit()
+    return {
+        "incident_id": iid,
+        "draft": draft,
+        "signed_by": None,
+        "signed_at": None,
+        "clock": clock,
+        "source": source,
+        "label": label,
+    }
 
 
 @app.post("/api/incidents/{iid}/report/sign")
 def sign_report(iid: str, payload: SignReportInput, _: str = Depends(operator)):
+    """Human signs after-action and closes. Never fails because Gemini is slow."""
     incident_or_404(iid)
-    report = get_report(iid, _)
-    draft = payload.edits.strip() or report["draft"]
+    try:
+        report = get_report(iid, _)
+    except Exception:
+        report = {
+            "draft": "After-action draft unavailable. Incident closed by human sign-off.",
+            "clock": {},
+            "source": "fallback",
+            "label": "Local draft",
+        }
+    draft = (payload.edits or "").strip() or report.get("draft") or "Incident closed by human sign-off."
+    clock = report.get("clock") or {}
     with db.connect() as conn:
         conn.execute(
-            "UPDATE reports SET draft=?,signed_by=?,signed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE incident_id=?",
-            (draft, payload.actor, iid),
+            "INSERT OR REPLACE INTO reports(incident_id,draft,clock_json,signed_by,signed_at) "
+            "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            (iid, draft, json.dumps(clock), payload.actor),
         )
-        conn.execute("UPDATE incidents SET status='closed',closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
-                     (iid,))
-        conn.execute("INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
-                     (iid, payload.actor, "sign_report", json.dumps({"clock": report.get("clock")})))
-    data = {"signed_by": payload.actor, "report": draft, "clock": report.get("clock")}
+        conn.execute(
+            "UPDATE incidents SET status='closed',closed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+            (iid,),
+        )
+        conn.execute(
+            "INSERT INTO decisions(incident_id,actor,action,detail_json) VALUES(?,?,?,?)",
+            (iid, payload.actor, "sign_report", json.dumps({"clock": clock})),
+        )
+        conn.commit()
+    data = {"signed_by": payload.actor, "report": draft, "clock": clock}
     bus.emit("incident.closed", iid, data)
-    return {"incident_id": iid, "signed_by": payload.actor, "draft": draft, "clock": report.get("clock")}
+    return {
+        "incident_id": iid,
+        "signed_by": payload.actor,
+        "draft": draft,
+        "clock": clock,
+        "source": report.get("source"),
+        "label": report.get("label"),
+    }
 
 
 @app.post("/api/ops/signals/refresh")
