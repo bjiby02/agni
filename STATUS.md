@@ -25,17 +25,20 @@
 
 ## Needs the account owner (blocks live E2E)
 
-Fill these in **local `.env` only**, then run `make live-ready`:
+Ceremony credit map: [docs/CEREMONY_SPONSOR_CREDITS.md](docs/CEREMONY_SPONSOR_CREDITS.md) (Opening Ceremony PDF is source of truth).
 
-- H2–H3: ElevenLabs + Twilio phone import → `ELEVENLABS_*`
-- H4: `GEMINI_API_KEY`
-- H5: Bright Data token + SERP zone
-- H6: Neon (optional tonight)
-- H7: FIRMS map key
-- H8: ORS key (OSRM fallback works without it)
-- H9: Flash Uno + `SERIAL_PORT`
-- H10: Real opted-in phones in `seed/warn_list.json` + `DISPATCHER_PHONE_NUMBER`
-- H11: Devpost
+Fill these in **local `.env` only**, then say `keys ready`:
+
+- H4 Gemini: sign in at `https://mlh.link/aistudio` (Google) → copy key into `GEMINI_API_KEY`
+- H2 ElevenLabs Creator: claim via **Slack**/staff (ceremony QR), then `https://elevenlabs.io/app/sign-up` → API key
+- H3 Twilio trial → import number into ElevenLabs → `ELEVENLABS_PHONE_NUMBER_ID`
+- H5 Bright Data: `https://brightdata.com/cp/start` + promo **`sandhacks26`** (room note; not printed on ceremony slide)
+- H6 Neon: `https://console.neon.tech/signup` + promo **`hackonneon`** when billing asks
+- H7 FIRMS email map key; H8 ORS/HeiGIT (optional; OSRM works)
+- H9 Uno `SERIAL_PORT`; H10 opted-in phones + `DISPATCHER_PHONE_NUMBER`
+- H11 Devpost
+
+Optional ceremony codes: Vultr `MAJORLEAGUEHACKING`, GoDaddy `MLHSH77`.
 
 ## Live boot
 
