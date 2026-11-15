@@ -428,6 +428,7 @@ function Ops() {
         <button onClick={() => run('Load cached scrapes', () => api('/api/ops/poll/signals', { method: 'POST' }))}>Load public posts (Bright Data, cached in practice)</button>
         <button onClick={() => run('Wind', () => api('/api/ops/poll/wind', { method: 'POST' }))}>Check wind (NWS)</button>
         <button onClick={() => run('Satellite', () => api('/api/ops/poll/satellite', { method: 'POST' }))}>Check satellite (FIRMS)</button>
+        <button onClick={() => run('Closures', () => api('/api/ops/poll/closures', { method: 'POST' }))}>Check road closures (Caltrans)</button>
         <button onClick={() => run('Wi-Fi-safe', () => api('/api/ops/safe-mode', { method: 'POST', body: { on: !status?.safe_mode } }))}>Wi-Fi-safe mode: {status?.safe_mode ? 'on' : 'off'}</button>
         <p className="muted">Mode: {status?.mode || '—'} · {status?.mock ? 'practice data' : 'live, unverified'} · cached camera stills: {status?.cached_cameras ?? 0}</p>
         <p className="muted">{msg}</p>

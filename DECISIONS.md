@@ -23,3 +23,6 @@
 - The caller camera page is a hash route in the same console app, served by FastAPI from `frontend/dist`, so one tunnel URL covers everything.
 - Bright Data runs on a timer and waits while an inbound call from the last 15 minutes has not ended. In practice mode /ops can load the synthetic fixture at any time because it makes no network request.
 - Posts are classified by Gemini when a key is set, otherwise by a keyword fallback that is labeled as such.
+
+- Caltrans closures: QuickMap's Full Closures layer is drawn from public KML files listed in `/config/layers.json` (checked by hand 2026-11-14). We read those files instead of clicking the map through the Browser API, because they hold the closure paths and do not break when the page layout changes. They go through the Web Unlocker zone when `BRIGHTDATA_UNLOCKER_ZONE` is set, otherwise directly. Only full closures are kept; a closure with no path is stored as a point and not used for routing, so no geometry is invented.
+- Tiger Data and Solana are not built: Solana is cut in Build Spec FINAL, and the surge counter does not need Tiger.

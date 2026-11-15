@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>Synthetic QuickMap sample (same shape as the real feed, made-up closures)</name>
+<Placemark><name> </name><description><![CDATA[<b>Full Closure</b><br>Route 56 Eastbound<br>From Carmel Country Rd to Camino Del Sur<br>Due to Practice Work<br>Expected to end at 5:00am Nov 15, 2026<br>Closure ID: CTEST1, Log Number: 2<br>Information courtesy of Caltrans<br>Last updated: 11/14/2026 4:34pm]]></description><styleUrl>#full-closure</styleUrl><Point><coordinates>-117.2101,32.9302,0</coordinates></Point></Placemark>
+<Placemark><name>CTEST1 Log 2 path</name><styleUrl>#fullClosurePath</styleUrl><MultiGeometry><LineString><coordinates>-117.2101,32.9302,0
+-117.2000,32.9350,0
+-117.1900,32.9400,0</coordinates></LineString></MultiGeometry></Placemark>
+<Placemark><name> </name><description><![CDATA[Lane Closure Route 5 Right lane Closure ID: CTEST2, Log Number: 1]]></description><styleUrl>#lcs</styleUrl><Point><coordinates>-117.2400,32.9000,0</coordinates></Point></Placemark>
+<Placemark><name> </name><description><![CDATA[Full Closure Route 162 Due to Bridge Work Closure ID: CFAR, Log Number: 1]]></description><styleUrl>#full-closure</styleUrl><Point><coordinates>-123.3484,39.6225,0</coordinates></Point></Placemark>
+<Placemark><name> </name><description><![CDATA[Full Closure Route 52 Westbound ramp Due to Practice Work Closure ID: CTEST3, Log Number: 1]]></description><styleUrl>#pending-full-closure</styleUrl><Point><coordinates>-117.1500,32.8400,0</coordinates></Point></Placemark>
+</Document>
+</kml>

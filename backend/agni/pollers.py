@@ -1,4 +1,4 @@
-"""Timed feeds: NWS wind (C8), NASA FIRMS satellite (C7) and Bright Data posts (C4).
+"""Timed feeds: NWS wind (C8), NASA FIRMS satellite (C7), Bright Data posts (C4) and Caltrans closures (C7).
 
 Each poll is a plain function, so /ops can run one on demand and tests can call it.
 The timer loop starts with the API when AGNI_POLLERS=1, or by default when AGNI_MOCK=0.
@@ -13,13 +13,13 @@ import os
 import time
 from typing import Any
 
-from . import bus, db, brightdata, ops
+from . import bus, db, brightdata, closures, ops
 from .config import settings
 import feeds
 import geo
 
 AREA = (float(os.environ.get("OPERATOR_AREA_LAT") or 32.88), float(os.environ.get("OPERATOR_AREA_LON") or -117.2))
-EVERY_S = {"wind": 600, "satellite": 600, "signals": 180}
+EVERY_S = {"wind": 600, "satellite": 600, "signals": 180, "closures": 600}
 
 
 def _stamp() -> str:
@@ -105,7 +105,13 @@ def poll_signals(force: bool = False) -> dict[str, Any]:
     return result
 
 
-POLLS = {"wind": poll_wind, "satellite": poll_satellite, "signals": poll_signals}
+def poll_closures(force: bool = False) -> dict[str, Any]:
+    result = closures.poll(force=force)
+    _record("closures", result["status"], json.dumps(result)[:500])
+    return result
+
+
+POLLS = {"wind": poll_wind, "satellite": poll_satellite, "signals": poll_signals, "closures": poll_closures}
 
 
 def enabled() -> bool:

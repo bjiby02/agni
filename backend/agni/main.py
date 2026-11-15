@@ -958,7 +958,7 @@ def ops_press1(payload: Press1Input, _: str = Depends(operator)):
 
 
 @app.post("/api/ops/poll/{name}")
-def ops_poll(name: Literal["wind","satellite","signals"], _: str = Depends(operator)):
+def ops_poll(name: Literal["wind","satellite","signals","closures"], _: str = Depends(operator)):
     if name=="signals": return pollers.poll_signals(force=settings.mock)  # live scraping still waits for an active call to end
     return pollers.POLLS[name]()
 

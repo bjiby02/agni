@@ -13,20 +13,19 @@ Mock mode is the build mode. Each task uses the states required by the agent bri
 | T6 Merge suggestions and undo | LIVE-UNVERIFIED | Offline tests prove suggest-only merge, human accept and undo restore the original row. |
 | T7 Routing and safe shelter refusal | LIVE-UNVERIFIED | Closure avoidance and downwind refusal pass. Fixed a bug where a refused shelter could still be chosen. Route line is labeled "Direction only". H8 is needed for live ORS. |
 | T8 Idempotent dispatch and serial bridge | LIVE-UNVERIFIED | Approving twice gives one dispatch and one serial write (fake records bytes). Sketch in `hardware/uno_station/`. H9 is needed for the buzz. |
-| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | SERP and Reddit/X dataset adapters cache raw JSON to `cache/brightdata/`, dedupe by URL, skip while a call is active (tested with the network blocked), and pin only from cached landmarks as gray "unverified". Practice mode uses a labeled synthetic fixture. Needs H5: token, SERP zone, dataset IDs. Caltrans closures through the Browser API are not built; the practice closure snapshot stays. |
+| T9 Bright Data pollers and classifier | LIVE-UNVERIFIED | SERP and Reddit/X dataset adapters cache raw JSON to `cache/brightdata/`, dedupe by URL, skip while a call is active (tested with the network blocked), and pin only from cached landmarks as gray "unverified". Practice mode uses a labeled synthetic fixture. Needs H5: token, SERP zone, dataset IDs. Caltrans full closures come from QuickMap's own KML layers (through the Web Unlocker zone when set), filtered to San Diego County, stored as hazards and routed around; tested against a synthetic KML in the real feed's shape. Mock mode keeps the practice closure snapshot. |
 | T10 JUMP IN and callback hand-back | LIVE-UNVERIFIED | `POST /api/calls/{id}/takeover` writes the summary card, then `get_guidance` returns `should_transfer=true` so the agent runs `transfer_to_number`. Hand-back calls the caller back through the ElevenLabs outbound-call adapter. Mock tests pass. H2/H3/H10 needed for a phone test. |
 | T11 Wind spread ring | LIVE-UNVERIFIED | A 100 m-cell, 10 km model grid produces a labeled 30-minute downwind estimate. The NW-wind test passes. |
 | T12 Targeted warning and rescue | LIVE-UNVERIFIED | Warning needs confirm, a ring and opted-in homes, then submits an ElevenLabs batch (mock records it). Practice mode uses fake 555 numbers when `seed/warn_list.json` is empty. Press 1 drops a rescue pin. H10 is needed for live calls. |
 | T13 Neon branches and surge simulation | LIVE-UNVERIFIED | The app runs on Postgres when `DATABASE_URL` is a postgres URL: all flow tests pass on local Postgres 16 (`AGNI_TEST_PG_URL`). `001_core.sql` adds PostGIS columns where available. `scripts/neon.py` applies the schema and creates/resets `surge-sim`; the surge uses `DATABASE_URL_SURGE`, refuses main, and gave 75 → 4 twice in a row on Postgres. Needs H6. |
 | T14 After-action report and measured proof panel | LIVE-UNVERIFIED | Close drafts one line per milestone citing its event, measures the clock from event timestamps, hashes the canonical log; a human signs. Proof panel reads only `eval.json`/`sim.json`. Gemini draft and Solana anchor need keys (Solana is a stretch). |
 | T15 Evaluation harness | LIVE-UNVERIFIED | `make eval` writes `eval.json` with n per metric. Merge precision is measured on 20 synthetic pairs. Frames, posts and caller personas show "not measured yet" until labeled data and keys exist. |
-| T16 Stretch integrations | BLOCKED | Tiger Data only if the surge counter needs it. Solana is cut in v2. |
+| T16 Stretch integrations | NOT NEEDED | The surge counter runs fine on SQLite/Postgres (75 calls well under 90 s), so Tiger Data is not needed. Solana is cut in Build Spec FINAL. |
 | T17 README, demo and rehearsal checklist | LIVE-UNVERIFIED | `make demo` plays every storyboard beat in mock mode in about 2 s and passes. `/ops` has Reset to Calm, a labeled replay call, surge and Wi-Fi-safe mode. H11 is needed for Devpost. |
 
 ## Not built yet
 
-- Caltrans QuickMap closures through the Bright Data Browser API (selectors must be found by hand) and shelter capacity through Web Unlocker. The map uses a labeled practice closure snapshot.
-- Stretch: Tiger Data counter, Solana memo.
+- Shelter capacity through Web Unlocker (no public source picked yet). Caltrans closures are built; on 2026-11-14 evening there were no full closures in San Diego County, so the demo still shows the labeled practice closure.
 
 ## Built since the first PR pass
 
