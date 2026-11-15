@@ -1,6 +1,6 @@
 # AGNI
 
-**Web data that helps people get out of a fire’s path.**
+**AI Agent that helps people get out of a fire’s path.**
 
 When 911 is flooded, AGNI answers the overflow call, fuses what callers say with **live web signals**, and puts one clear picture in front of a human dispatcher — so a unit and a warning go out faster, and AI never decides alone.
 
