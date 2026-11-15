@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import L from 'leaflet';
+import QRCode from 'qrcode';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
 
-const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+// Same origin when FastAPI serves the built console; the Vite dev server talks to the local API.
+const API = import.meta.env.VITE_API_URL || (location.port === '5173' ? 'http://127.0.0.1:8000' : '');
 const TOKEN = (() => { try { return localStorage.getItem('agni.operatorToken') || ''; } catch { return ''; } })();
 const AUTH = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
 const EVENT_TYPES = [
@@ -108,6 +110,11 @@ function MapView({ state, live, selected, onSelect }) {
       if (coords) L.polygon(coords.map(([lon, lat]) => [lat, lon]), { color: '#FF9F0A', weight: 1, fillOpacity: .18, dashArray: '4 4' })
         .bindTooltip(`${r.minutes}-min estimate`, { permanent: false }).addTo(g);
     });
+    (state.signals || []).forEach(sg => {
+      if (sg.lat == null) return;
+      L.circleMarker([sg.lat, sg.lon], { radius: 5, color: '#8E8E93', weight: 1, dashArray: '2 2', fillOpacity: 0 })
+        .bindTooltip(`Unverified ${sg.source} post · ${sg.classifier}${sg.url.startsWith('https://practice.invalid') ? ' · practice fixture' : ''}`).addTo(g);
+    });
     (state.units || []).forEach(u => L.circleMarker([u.lat, u.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: u.status === 'available' ? '#fff' : '#8E8E93', fillOpacity: .9 })
       .bindTooltip(`${u.callsign} · ${u.status}`).addTo(g));
     const route = selected && live.routes[selected.id];
@@ -168,7 +175,7 @@ function Evidence({ incident, seq }) {
     if (!incident) { setRows([]); return; }
     api(`/api/incidents/${incident.id}/evidence`).then(r => setRows(r.rows || [])).catch(() => setRows([]));
   }, [incident?.id, seq]);
-  const names = { callers: 'Callers', caller_location: 'Caller landmark', cameras: 'Cameras', wind: 'Wind', firms: 'Satellite · FIRMS', nifc: 'Perimeter · NIFC' };
+  const names = { public: 'Public posts', callers: 'Callers', caller_location: 'Caller landmark', cameras: 'Cameras', wind: 'Wind', firms: 'Satellite · FIRMS', nifc: 'Perimeter · NIFC' };
   return <div className="evidence">{rows.map(r => <div className="ev-row" key={r.source}>
     <i className={`dot ${r.state === 'agree' ? 'agree' : r.state === 'partial' ? 'partial' : 'unknown'}`} />
     <span><b>{names[r.source] || r.source}</b><small>{r.detail}</small></span>
@@ -279,7 +286,7 @@ function Console() {
       </aside>
       <section className="center">
         <MapView state={state} live={live} selected={selected} onSelect={setSelectedId} />
-        <div className="map-legend"><span><i className="dot unknown" />Not confirmed</span><span><i className="dot red" />Confirmed by human</span><span><i className="dot est" />Estimate</span><span><i className="dash" />Closure ({state.hazards?.[0]?.source || 'none'})</span></div>
+        <div className="map-legend"><span><i className="dot unknown" />Not confirmed</span><span><i className="dot red" />Confirmed by human</span><span><i className="dot est" />Estimate</span><span><i className="dot unknown" style={{ borderStyle: 'dashed', width: 8, height: 8 }} />Public post (unverified)</span><span><i className="dash" />Closure ({state.hazards?.[0]?.source || 'none'})</span></div>
         <CameraWall selected={selected} mock={settings.mode === 'mock'} />
       </section>
       <aside className="rail right">
@@ -312,6 +319,96 @@ function Console() {
   </main>;
 }
 
+function CamLink() {
+  const [link, setLink] = useState(null);
+  const [qr, setQr] = useState('');
+  const [err, setErr] = useState('');
+  const make = async () => {
+    try {
+      const st = await api('/api/state');
+      const inc = st.incidents?.[0];
+      if (!inc) throw new Error('No open incident yet');
+      const l = await api('/api/ops/cam-link', { method: 'POST', body: { incident_id: inc.id } });
+      const url = l.url || `${location.origin}${location.pathname}${l.path.slice(1)}`;
+      setLink({ ...l, url, title: inc.title }); setQr(await QRCode.toDataURL(url, { margin: 1, width: 220 })); setErr('');
+    } catch (e) { setErr(e.message); }
+  };
+  return <div className="card"><span className="eyebrow">Caller camera link</span>
+    <button onClick={make}>New one-time link for the newest incident</button>
+    {link && <><img className="qr" src={qr} alt="QR code for the camera page" /><small className="hash">{link.url}</small><small className="muted">Expires {new Date(link.expires_at).toLocaleTimeString()} · one upload</small></>}
+    {err && <small className="error">{err}</small>}
+  </div>;
+}
+
+function readHeading(e) {
+  if (typeof e.webkitCompassHeading === 'number') return e.webkitCompassHeading;
+  if (e.absolute && typeof e.alpha === 'number') return (360 - e.alpha) % 360;
+  return null;
+}
+
+function compassWord(deg) {
+  return ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(deg / 45) % 8];
+}
+
+function CamPage({ token }) {
+  const [stage, setStage] = useState('start'); // start, camera, analyzing, result, denied, failed, invalid
+  const [status, setStatus] = useState(null);
+  const [heading, setHeading] = useState(null);
+  const [result, setResult] = useState(null);
+  const video = useRef(null);
+  const stream = useRef(null);
+  const fix = useRef(null);
+  const frame = useRef(null);
+  useEffect(() => { api(`/api/cam/${token}`).then(setStatus).catch(() => setStatus({ valid: false })); }, [token]);
+  useEffect(() => () => stream.current?.getTracks().forEach(t => t.stop()), []);
+  const start = async () => {
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission().catch(() => {});
+      const onTurn = e => { const h = readHeading(e); if (h != null) setHeading(Math.round(h)); };
+      addEventListener('deviceorientationabsolute', onTurn); addEventListener('deviceorientation', onTurn);
+      navigator.geolocation?.getCurrentPosition(p => { fix.current = p.coords; }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+      stream.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      setStage('camera');
+      setTimeout(() => { if (video.current) { video.current.srcObject = stream.current; video.current.play(); } }, 0);
+    } catch { setStage('denied'); }
+  };
+  const send = async blob => {
+    setStage('analyzing');
+    const q = new URLSearchParams();
+    if (heading != null) q.set('heading_deg', String(heading % 360));
+    if (fix.current) { q.set('lat', fix.current.latitude); q.set('lon', fix.current.longitude); q.set('accuracy_m', Math.round(fix.current.accuracy)); }
+    try {
+      const r = await fetch(`${API}/api/cam/${token}/frame?${q}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || 'failed');
+      setResult(data); setStage('result');
+    } catch { setStage('failed'); }
+  };
+  const capture = () => {
+    const v = video.current; if (!v) return;
+    const scale = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement('canvas'); c.width = v.videoWidth * scale; c.height = v.videoHeight * scale;
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    stream.current?.getTracks().forEach(t => t.stop());
+    c.toBlob(b => { frame.current = b; send(b); }, 'image/jpeg', 0.7);
+  };
+  const unsure = result && !['smoke', 'flames'].includes(result.label);
+  if (status && !status.valid) return <main className="cam-page"><h1>This link has {status.expired ? 'expired' : status.used ? 'already been used' : 'a problem'}.</h1><p>That's okay. Stay on the line and keep talking to us.</p></main>;
+  return <main className="cam-page">
+    <p className="eyebrow">AGNI · 911 overflow</p>
+    <h1>San Diego 911 sent you this link.</h1>
+    {stage === 'start' && <><p>If it is safe, point your phone at the smoke. This helps a dispatcher see it.</p><button className="big" onClick={start}>Show us what you see</button><small className="muted">We ask for the camera only after you tap.</small></>}
+    {stage === 'camera' && <><video ref={video} playsInline muted className="viewfinder" />
+      <div className="compass">{heading != null ? `Pointing ${compassWord(heading)} · ${heading}°` : 'Compass not available'}</div>
+      <button className="big" onClick={capture}>Send this view</button></>}
+    {stage === 'analyzing' && <div className="analyzing"><span className="spinner" />Looking at your photo…</div>}
+    {stage === 'result' && <><h2>{unsure ? "Can't tell from the image" : result.label === 'flames' ? 'We see flames' : 'We see smoke'}</h2>
+      <p>{unsure ? 'Your call still counts. A dispatcher has your report.' : 'Thank you. A dispatcher can see this now.'}</p><p className="muted">Stay on the line.</p></>}
+    {stage === 'denied' && <><h2>That's okay.</h2><p>Stay on the line and keep talking to us.</p></>}
+    {stage === 'failed' && <><h2>Couldn't send.</h2><p>Your photo is kept on this page.</p><button className="big" onClick={() => frame.current && send(frame.current)}>Try again</button></>}
+  </main>;
+}
+
 function Ops() {
   const [status, setStatus] = useState(null);
   const [msg, setMsg] = useState('');
@@ -328,10 +425,14 @@ function Ops() {
         <button onClick={() => run('Reset to Calm', () => api('/api/ops/reset', { method: 'POST' }))}>Reset to Calm</button>
         <button onClick={() => run('Replay call', () => api('/api/ops/replay', { method: 'POST', body: { name: 'call_es', speed: 1 } }))}>Play replay call (labeled)</button>
         <button onClick={() => run('Surge', () => api('/api/ops/surge', { method: 'POST', body: { n: 75, seconds: 90 } }))}>Start 75-call surge (separate database)</button>
+        <button onClick={() => run('Load cached scrapes', () => api('/api/ops/poll/signals', { method: 'POST' }))}>Load public posts (Bright Data, cached in practice)</button>
+        <button onClick={() => run('Wind', () => api('/api/ops/poll/wind', { method: 'POST' }))}>Check wind (NWS)</button>
+        <button onClick={() => run('Satellite', () => api('/api/ops/poll/satellite', { method: 'POST' }))}>Check satellite (FIRMS)</button>
         <button onClick={() => run('Wi-Fi-safe', () => api('/api/ops/safe-mode', { method: 'POST', body: { on: !status?.safe_mode } }))}>Wi-Fi-safe mode: {status?.safe_mode ? 'on' : 'off'}</button>
         <p className="muted">Mode: {status?.mode || '—'} · {status?.mock ? 'practice data' : 'live, unverified'} · cached camera stills: {status?.cached_cameras ?? 0}</p>
         <p className="muted">{msg}</p>
       </div>
+      <CamLink />
       <div className="card"><span className="eyebrow">Proof panel · only measured numbers</span>
         {['merge_precision', 'triage_accuracy', 'post_precision', 'caller_personas'].map(k => metric(k, ev?.[k]))}
         <div className="metric"><span>surge: calls → incidents</span><b>{sim ? `${sim.calls} → ${sim.visible_incidents}` : 'not measured yet'}</b><small>{sim ? `${sim.accepted_merges} merges in ${sim.duration_s} s · ${sim.branch}` : 'run the surge'}</small></div>
@@ -343,6 +444,8 @@ function Ops() {
 function App() {
   const [route, setRoute] = useState(location.hash);
   useEffect(() => { const f = () => setRoute(location.hash); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f); }, []);
+  const cam = route.match(/^#\/sos\/cam\/([A-Za-z0-9_-]{8,64})/);
+  if (cam) return <CamPage token={cam[1]} />;
   return route.startsWith('#/ops') ? <Ops /> : <Console />;
 }
 

@@ -33,7 +33,7 @@ def connect():
 
 def init() -> None:
     with _LOCK, connect() as db:
-        for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql"):
+        for name in ("001_core.sqlite.sql", "002_ops.sqlite.sql", "003_feeds.sqlite.sql"):
             db.executescript((ROOT / "backend" / "migrations" / name).read_text())
 
         count = db.execute("SELECT COUNT(*) FROM units").fetchone()[0]

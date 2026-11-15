@@ -11,7 +11,8 @@ from . import bus, db
 ROOT = Path(__file__).resolve().parents[2]
 HAZARDS_SNAPSHOT = ROOT / "cache" / "hazards_demo.geojson"
 LIVE_TABLES = ("incidents", "calls", "transcripts", "bearings", "evidence", "decisions", "dispatches", "merges",
-               "rings", "warnings", "rescues", "handoffs", "transfer_requests", "reports", "outbox", "call_contacts")
+               "rings", "warnings", "rescues", "handoffs", "transfer_requests", "reports", "outbox", "call_contacts",
+               "cam_tokens", "camera_frames", "signals", "satellite_hits")
 
 
 def load_hazard_snapshot() -> int:

@@ -54,3 +54,12 @@ kbd{display:inline-block;min-width:22px;margin-right:8px;padding:1px 6px;border:
 .metric{display:grid;grid-template-columns:1fr auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}.metric small{grid-column:1/-1;color:var(--muted);font-size:12px}
 @keyframes pulse{50%{opacity:.3}}@keyframes slide{from{transform:translateY(6px);opacity:0}}@keyframes ring{70%{box-shadow:0 0 0 14px rgba(255,59,48,0)}}
 @media (max-width:1100px){.grid{grid-template-columns:1fr}.rail{border:0}.map{min-height:50vh}.ops-grid{grid-template-columns:1fr}}
+.qr{width:180px;height:180px;border-radius:8px;background:#fff;padding:6px}
+.cam-page{max-width:520px;margin:0 auto;padding:24px 16px;display:flex;flex-direction:column;gap:14px;min-height:100vh}
+.cam-page h1{font-size:24px;margin:0}.cam-page h2{margin:0}.cam-page p{margin:0;font-size:17px;line-height:1.45}
+.big{padding:18px;font-size:18px;text-align:center;border-radius:14px;background:rgba(255,59,48,.18);border-color:rgba(255,59,48,.5)}
+.viewfinder{width:100%;border-radius:14px;background:#000;aspect-ratio:3/4;object-fit:cover}
+.compass{align-self:flex-start;font-size:14px;padding:5px 12px;border-radius:99px;background:var(--glass);border:1px solid var(--line)}
+.analyzing{display:flex;gap:12px;align-items:center;font-size:17px}
+.spinner{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--text);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

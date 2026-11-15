@@ -46,7 +46,9 @@ from . import routing
 from . import handoff as handoff_service
 from . import report as report_service
 from . import ops as ops_service
-from .services import elevenlabs, serial_bridge
+from .services import elevenlabs, serial_bridge, twilio_sms
+from . import camlink
+from . import pollers
 from sim import surge as surge_runner
 import feeds
 import geo
@@ -205,11 +207,15 @@ def _ensure_seed() -> None:
 async def lifespan(app: FastAPI):
     db.init()
     _ensure_seed()
+    task = asyncio.create_task(pollers.run_forever()) if pollers.enabled() else None
     yield
+    if task: task.cancel()
 
 
 app = FastAPI(title="AGNI Incident API", version="0.2.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"]
+                   + ([os.environ["PUBLIC_BASE_URL"].rstrip("/")] if os.environ.get("PUBLIC_BASE_URL") else []),
+                   allow_methods=["*"], allow_headers=["*"])
 app.add_api_route("/api/calls/postcall", postcall, methods=["POST"])
 
 
@@ -278,6 +284,12 @@ def health():
             "brightdata_key_set": bool(os.environ.get("BRIGHTDATA_API_TOKEN") or os.environ.get("BRIGHTDATA_API_KEY"))}
 
 
+def recent_signals() -> list[dict]:
+    with db.connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT id,source,url,text,lat,lon,confidence,classifier,incident_id,posted_at,scraped_at "
+                                              "FROM signals WHERE is_fire_report=1 ORDER BY scraped_at DESC LIMIT 50")]
+
+
 PRACTICE_WIND={"from_deg":20,"to_deg":200,"speed_mps":6.0,"source":"practice value · not observed","observed_at":None}
 CAMERA_CACHE=ROOT/"cache"/"cameras.json"
 
@@ -298,6 +310,8 @@ def current_wind_to(iid: str) -> tuple[float | None, str]:
         try: return json.loads(ring["wind_json"]).get("to_deg"), "ring"
         except (TypeError, ValueError): pass
     if settings.mock: return PRACTICE_WIND["to_deg"], PRACTICE_WIND["source"]
+    obs=pollers.latest_wind()
+    if obs and obs["to_deg"] is not None: return obs["to_deg"], obs["source"]
     return None, "wind not checked"
 
 
@@ -308,11 +322,13 @@ def get_state(_: str = Depends(operator)):
         state["feeds"] = {"status":"mock","wind":PRACTICE_WIND,"wind_age_s":None,"camera_count":len(cached_cameras()),
                           "cameras":[],"fires":[],"hotspots":[],"firms_status":"mock",
                           "note":"No external feeds are called in mock mode."}
+        state["signals"] = recent_signals()
         return state
+    state["signals"] = recent_signals()
     spot = feeds.area()
     if spot:
         sit = feeds.situation(spot["lat"],spot["lon"])
-        state["feeds"] = {"center": spot, "wind": sit.get("wind"), "wind_age_s": sit.get("wind_age_s"),
+        state["feeds"] = {"center": spot, "wind": pollers.latest_wind() or sit.get("wind"), "wind_age_s": sit.get("wind_age_s"),
                           "camera_count": sit.get("camera_count",0), "cameras": sit.get("cameras",[]),
                           "fires": sit.get("fires",[]), "hotspots": sit.get("hotspots",[]),
                           "firms_status":"ready" if os.environ.get("FIRMS_MAP_KEY") else "key_not_set",
@@ -366,7 +382,11 @@ def evidence_rows(iid: str) -> list[dict]:
     if loc: rows.append({**loc,"source":"caller_location"})
     cams=stored.get("cameras") or stored.get("camera")
     rows.append(cams or {"source":"cameras","state":"empty","detail":"Cameras not analyzed · Gemini key not set" if settings.mock or not os.environ.get("GEMINI_API_KEY") else "Cameras not checked yet","age_s":None})
-    rows.append({"source":"wind","state":"empty","detail":"Practice wind value · not an observation" if settings.mock else "Wind feed not checked yet","age_s":None})
+    obs=None if settings.mock else pollers.latest_wind()
+    rows.append({"source":"wind","state":"partial" if obs else "empty",
+                 "detail":(f"From {round(obs['from_deg'])}° at {obs['speed_mps']} m/s · {obs['source']}" if obs else
+                           "Practice wind value · not an observation" if settings.mock else "Wind feed not checked yet"),"age_s":None})
+    rows.append(stored.get("public") or {"source":"public","state":"empty","detail":"No public posts matched yet","age_s":None})
     rows.append(stored.get("firms") or {"source":"firms","state":"empty","detail":"Satellite not checked · FIRMS key not set" if not os.environ.get("FIRMS_MAP_KEY") else "No detection yet; satellite data can lag hours","age_s":None})
     rows.append(stored.get("nifc") or {"source":"nifc","state":"empty","detail":"No perimeter mapped; this does not rule out fire","age_s":None})
     return rows
@@ -499,10 +519,20 @@ def get_guidance(payload: GuidanceInput, _: None = Depends(tool_auth)):
 
 @app.post("/api/tools/send_cam_link")
 def send_cam_link(payload: GuidanceInput, _: None = Depends(tool_auth)):
-    if settings.mock:
-        return {"say":"A camera link is not available in this practice call."}
-    # SMS is disabled until the opt-in and signed-link path is implemented.
-    return {"say":"A camera link is not available yet. Please keep describing what you see."}
+    with db.connect() as conn:
+        call=conn.execute("SELECT incident_id FROM calls WHERE id=?",(payload.conversation_id,)).fetchone()
+        contact=conn.execute("SELECT phone FROM call_contacts WHERE call_id=?",(payload.conversation_id,)).fetchone()
+    if not call or not call["incident_id"]: raise HTTPException(404,"Call not found")
+    link=camlink.create(call["incident_id"],payload.conversation_id)
+    if not link["url"] and not settings.mock:
+        return {"say":"A camera link is not available yet. Please keep describing what you see.","sent":False}
+    # SMS goes only to the number that called us. Practice mode records it and shows the link on /ops.
+    status=twilio_sms.send(contact["phone"] if contact else "",
+                           f"San Diego 911 overflow sent you this link to show us the smoke: {link['url'] or link['path']}",
+                           f"call:{payload.conversation_id}") if (contact or settings.mock) else "no_caller_number"
+    if status in {"no_caller_number","key_not_set","failed"}:
+        return {"say":"I could not text you a link. Please keep describing what you see.","sent":False}
+    return {"say":"I sent you a text with a link. Tap it to show me the smoke. Stay on the line.","sent":True}
 
 
 @app.post("/api/tools/request_rescue")
@@ -927,6 +957,53 @@ def ops_press1(payload: Press1Input, _: str = Depends(operator)):
                                       incident_id=row["incident_id"],home_id=payload.home_id),None)
 
 
+@app.post("/api/ops/poll/{name}")
+def ops_poll(name: Literal["wind","satellite","signals"], _: str = Depends(operator)):
+    if name=="signals": return pollers.poll_signals(force=settings.mock)  # live scraping still waits for an active call to end
+    return pollers.POLLS[name]()
+
+
+# ---------------------------------------------------------------- caller camera page (C2)
+class CamLinkInput(BaseModel):
+    incident_id: str = Field(min_length=1, max_length=40)
+
+
+@app.post("/api/ops/cam-link")
+def ops_cam_link(payload: CamLinkInput, _: str = Depends(operator)):
+    incident_or_404(payload.incident_id)
+    return camlink.create(payload.incident_id, None)
+
+
+@app.get("/api/cam/{token}")
+def cam_status(token: str):
+    item=camlink.lookup(token)
+    if not item: raise HTTPException(404,"Link not found")
+    return {"valid":not item["expired"] and not item["used_at"],"expired":item["expired"],"used":bool(item["used_at"])}
+
+
+@app.post("/api/cam/{token}/frame")
+async def cam_frame(token: str, request: Request, heading_deg: float | None = None, lat: float | None = None,
+                    lon: float | None = None, accuracy_m: float | None = None):
+    mime=request.headers.get("content-type","").split(";",1)[0].strip().lower()
+    if mime not in {"image/jpeg","image/png","image/webp"}: raise HTTPException(415,"Upload a JPEG, PNG, or WebP image")
+    blob=await request.body()
+    if not blob: raise HTTPException(400,"Empty image")
+    if len(blob)>5_000_000: raise HTTPException(413,"Image must be 5 MB or smaller")
+    if heading_deg is not None and not 0<=heading_deg<360: raise HTTPException(422,"heading_deg must be 0-359")
+    if (lat is None)!=(lon is None) or (lat is not None and not (-90<=lat<=90 and -180<=lon<=180)):
+        raise HTTPException(422,"Send both lat and lon, or neither")
+    try:
+        return await asyncio.to_thread(camlink.submit,token,blob,mime,heading_deg,lat,lon,accuracy_m,recompute_estimate)
+    except LookupError as error: raise HTTPException(404,str(error))
+    except PermissionError as error: raise HTTPException(410,str(error))
+
+
+@app.get("/api/cam/{token}/result")
+def cam_result(token: str):
+    if not camlink.lookup(token): raise HTTPException(404,"Link not found")
+    return {"result":camlink.last_result(token)}
+
+
 @app.get("/api/stream")
 async def stream_alias(request: Request,since: int=0,authorization: str|None=Header(default=None),_: str=Depends(operator)):
     return await events(request,since,authorization,_)
@@ -948,3 +1025,11 @@ async def events(request: Request,since: int=0,authorization: str|None=Header(de
             await asyncio.sleep(.5)
     return StreamingResponse(stream(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
+
+
+# Serve the built console (frontend/dist) from the API so one tunnel URL covers the console,
+# /ops and the caller camera page. Mounted last so it never shadows an API route.
+_DIST = ROOT / "frontend" / "dist"
+if _DIST.exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="console")
